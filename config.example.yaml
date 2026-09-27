@@ -1,0 +1,76 @@
+# Flickwise config — the installer copies this to config.yaml (which is never committed).
+#
+# AI backend: Google Gemini by default. Get a free key at https://aistudio.google.com/app/apikey
+# (Flickwise opens a setup window on first run if the key is empty.)
+# To use the Glean CLI instead, set glean_binary_path (e.g. "/opt/homebrew/bin/glean").
+glean_binary_path: ""
+gemini_api_key: ""
+gemini_model: "gemini-flash-lite-latest"
+
+picker_hotkey: ["cmd", "shift", "p"]
+
+defaults:
+  timeout_seconds: 30
+  debug: false         # true = verbose log (includes your text) in flickwise.log
+  sound: "Tink"         # macOS sound on completion — set to false to disable
+                        # options: Basso, Blow, Bottle, Frog, Funk, Glass, Hero,
+                        #          Morse, Ping, Pop, Purr, Sosumi, Submarine, Tink
+
+# ── Features ─────────────────────────────────────────────────────────────────
+# Every optional feature can be switched on/off here (or from the menu bar →
+# Features). Keep this section ABOVE `modes:`.
+features:
+  idle_pill:
+    enabled: false            # tiny resting pill at bottom-center when idle
+  diff_bubble:
+    enabled: true             # "what changed" bubble + undo after each fix
+    duration_seconds: 6       # auto-dismiss; paused while the mouse is over it
+    undo_hotkey: ["cmd", "z"] # works only while the bubble is visible
+    undo_method: "app"        # app = send ⌘Z to the app | reselect = select the result and paste the original
+    context_words: 8          # unchanged words shown around each change
+  radial_menu:
+    enabled: true             # hold the trigger, flick toward a mode, release to apply
+    trigger: "right_option"   # right_option | right_command | right_control | right_shift, or a chord like ["ctrl", "alt", "space"]
+    hold_ms: 150              # modifier triggers: hold this long before the ring opens (a quick tap does nothing)
+    anchor: "mouse"           # mouse | caret (caret falls back to mouse when the app doesn't expose it)
+    modes: []                 # mode names clockwise from the top, e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+
+modes:
+  - name: "Fix Grammar"
+    hotkey: ["cmd", "shift", "g"]
+    system_prompt: |
+      You are a silent grammar and clarity fixer. Rules:
+      1. Return ONLY the corrected text. No preamble, no explanation, no quotes.
+      2. Preserve original tone, formality, formatting (newlines, markdown, emoji).
+      3. If input is already correct, return it unchanged.
+      4. Never add or remove meaning — only fix grammar, spelling, awkward phrasing.
+      5. Do not ask follow-up questions. Do not add any closing remarks. Stop after the corrected text.
+
+  - name: "Make Concise"
+    hotkey: ["cmd", "shift", "c"]
+    system_prompt: |
+      Cut the text by ~40% while preserving all meaning. Return only the
+      shortened text. No preamble. Do not ask follow-up questions. Do not add any closing remarks.
+
+  - name: "Explain Code"
+    hotkey: ["cmd", "shift", "e"]
+    diff_bubble: false        # output is an explanation, not an edit
+    system_prompt: |
+      Explain this code in 2 short sentences for a teammate. Return only
+      the explanation, no code. Do not ask follow-up questions. Do not add any closing remarks.
+
+  - name: "Clarify Message"
+    hotkey: ["cmd", "shift", "m"]
+    system_prompt: |
+      Rewrite the text so the message is clear and easy to understand. Fix grammar,
+      remove ambiguity, and improve word choice — but preserve the original intent and tone.
+      Return only the rewritten text. No preamble, no explanation, no quotes.
+      Do not ask follow-up questions. Do not add any closing remarks.
+      Never use these special characters: "—" or ";"
+
+  - name: "Urdu to English"
+    hotkey: ["cmd", "shift", "u"]
+    system_prompt: |
+      Translate the following Urdu text into natural, fluent English. Return only the
+      translated text. No preamble, no explanation, no quotes. Do not ask follow-up
+      questions. Do not add any closing remarks.

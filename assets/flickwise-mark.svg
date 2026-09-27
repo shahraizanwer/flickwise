@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="760" viewBox="215 110 760 760">
+  <defs>
+    <mask id="cut">
+      <rect x="-300" y="-400" width="600" height="800" fill="#fff"/>
+      <circle cx="0" cy="-30" r="38" fill="#000"/>
+      <rect x="-12" y="-30" width="24" height="300" fill="#000"/>
+    </mask>
+    <mask id="gap">
+      <rect x="0" y="0" width="1024" height="1024" fill="#fff"/>
+      <g transform="translate(500 530) rotate(45)">
+        <path d="M -135 -150 C -140 -20 -60 110 0 250 C 60 110 140 -20 135 -150 Q 0 -215 -135 -150 Z" fill="#000" stroke="#000" stroke-width="44"/>
+      </g>
+    </mask>
+  </defs>
+  <!-- flick streaks -->
+  <g stroke="#000" stroke-width="44" stroke-linecap="round" fill="none">
+    <line x1="648" y1="232" x2="712" y2="168"/>
+    <line x1="722" y1="306" x2="822" y2="206"/>
+    <line x1="796" y1="380" x2="860" y2="316"/>
+  </g>
+
+  <!-- ink check -->
+  <path fill="#000" mask="url(#gap)"
+        d="M 326 704
+           C 352 734 378 760 398 778
+           C 404 783 410 783 416 779
+           L 742 590
+           C 756 582 768 600 756 610
+           L 432 826
+           C 410 841 392 838 376 822
+           C 356 800 336 760 326 704 Z"/>
+
+  <!-- nib -->
+  <g transform="translate(500 530) rotate(45)">
+    <path mask="url(#cut)" fill="#000"
+          d="M -135 -150 C -140 -20 -60 110 0 250 C 60 110 140 -20 135 -150 Q 0 -215 -135 -150 Z"/>
+    <rect x="-108" y="-262" width="216" height="72" rx="24" fill="#000"/>
+  </g>
+</svg>

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232042"/>
+      <stop offset="1" stop-color="#0B0B12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.38" cy="0.66" r="0.55">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="nib" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="0.55" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="collar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDE9FE"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="streak" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="cut">
+      <rect x="-300" y="-400" width="600" height="800" fill="#fff"/>
+      <circle cx="0" cy="-30" r="34" fill="#000"/>
+      <rect x="-8" y="-30" width="16" height="300" fill="#000"/>
+    </mask>
+  </defs>
+
+  <!-- tile -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="3"/>
+
+  <!-- flick streaks -->
+  <g stroke="url(#streak)" stroke-width="30" stroke-linecap="round" fill="none">
+    <line x1="648" y1="232" x2="712" y2="168"/>
+    <line x1="722" y1="306" x2="822" y2="206"/>
+    <line x1="796" y1="380" x2="860" y2="316"/>
+  </g>
+
+  <!-- ink check -->
+  <path fill="url(#ink)"
+        d="M 326 704
+           C 352 734 378 760 398 778
+           C 404 783 410 783 416 779
+           L 742 590
+           C 756 582 768 600 756 610
+           L 432 826
+           C 410 841 392 838 376 822
+           C 356 800 336 760 326 704 Z"/>
+
+  <!-- nib -->
+  <g transform="translate(500 530) rotate(45)">
+    <path mask="url(#cut)" fill="url(#nib)"
+          d="M -135 -150 C -140 -20 -60 110 0 250 C 60 110 140 -20 135 -150 Q 0 -215 -135 -150 Z"/>
+    <rect x="-108" y="-262" width="216" height="72" rx="24" fill="url(#collar)"/>
+  </g>
+</svg>

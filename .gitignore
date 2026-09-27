@@ -1,0 +1,9 @@
+# Personal config — contains your API key. The template is config.example.yaml.
+config.yaml
+
+# Runtime
+*.log
+.DS_Store
+
+# Installer backups
+*.backup.*
