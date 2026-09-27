@@ -242,7 +242,7 @@ local function choose(index)
     if _timer then _timer:stop() end
     _timer = hs.timer.doAfter(0.08, function()
         _timer = nil
-        text_replacer.run_with_text(s.text, s.original, mode, _config)
+        text_replacer.run_with_text(s.text, s.original, mode, _config, s.ax)
     end)
 end
 
@@ -296,8 +296,8 @@ local function on_event(e)
     return true
 end
 
-local function open(text, original, win)
-    _session = { text = text, original = original, win = win, query = "", sel = 1 }
+local function open(text, original, win, ax_ctx)
+    _session = { text = text, original = original, win = win, ax = ax_ctx, query = "", sel = 1 }
     _session.items = filtered_items("")
 
     _wv:frame(frame_for(#_config.modes))
@@ -371,6 +371,13 @@ function M.setup(config)
         local win = hs.window.focusedWindow()
         local front_app = hs.application.frontmostApplication()
         notifier.log("Picker triggered — front app: " .. (front_app and front_app:name() or "nil"))
+
+        -- Direct (Accessibility) capture first: no ⌘C, clipboard untouched.
+        local ax_ctx = text_replacer.capture_direct(_config)
+        if ax_ctx then
+            open(ax_ctx.text, nil, win, ax_ctx)
+            return
+        end
 
         local original = hs.pasteboard.getContents()
         hs.timer.usleep(100000)

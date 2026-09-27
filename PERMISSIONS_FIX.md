@@ -1,15 +1,15 @@
 # 🔐 Flickwise Permissions Fix
 
 ## The Problem
-"No text selected" error occurs because **Hammerspoon needs Accessibility permissions** to send keyboard commands (Cmd+C) to other applications.
+The "Select some text first" error (or nothing happening) usually means **Hammerspoon doesn't have Accessibility permission**.
 
 ## Root Cause
-When you press the Flickwise hotkey, Hammerspoon tries to:
-1. Send Cmd+C to copy selected text
-2. Read the clipboard
-3. Send Cmd+V to paste the result
+When you press a Flickwise hotkey, Hammerspoon:
+1. Reads the selected text directly through Accessibility, or falls back to sending ⌘C and reading the clipboard
+2. Sends the text to the AI
+3. Writes the result back through Accessibility, or falls back to pasting with ⌘V
 
-Without **Accessibility** permissions, step 1 fails - the Cmd+C never reaches your app, so the clipboard stays empty.
+Every one of these steps needs **Accessibility** permission. Without it, Flickwise can neither read your selection nor send ⌘C to your app.
 
 ## Solution: Grant Hammerspoon Accessibility Permissions
 

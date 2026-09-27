@@ -167,7 +167,7 @@ end
 
 local function caret_point()
     local ok, pt = pcall(function()
-        local el = hs.axuielement.systemElement():attributeValue("AXFocusedUIElement")
+        local el = hs.axuielement.systemWideElement():attributeValue("AXFocusedUIElement")
         if not el then return nil end
         local range = el:attributeValue("AXSelectedTextRange")
         if not range then return nil end

@@ -41,6 +41,11 @@ hotkey, and the text is replaced with an AI-transformed version. Start with
   that is active only while the popup is visible. Stop the tap before sending synthetic keys.
 - A hidden webview never fires `requestAnimationFrame`, so measure and post sizes synchronously.
 - Wrap eventtap callbacks in `xpcall`. A Lua error inside a tap must not leave the keyboard stuck.
+- Accessibility: the system-wide element is `hs.axuielement.systemWideElement()` (there is no
+  `systemElement`). AX text ranges are UTF-16 units (`ax_text.u16len`). Walking a browser's AX tree
+  can take many seconds, so never search it broadly.
+- Keep a reference to every `hs.timer` you create (including in test stubs). Unreferenced timers
+  can be garbage-collected before they fire, which can leave `_in_flight` stuck until a reload.
 - Log with `notifier.log` (or `notifier.debug` for verbose output) to `flickwise.log`.
 
 ## Testing

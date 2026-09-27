@@ -7,7 +7,9 @@
 -- click elsewhere dismisses it, because the undo is only safe right after the paste.
 -- Public API:
 --   M.configure(settings)                       features.diff_bubble table
---   M.show(original, result, mode_name, win)    -> true if a bubble was shown
+--   M.show(original, result, mode_name, win, ax_ctx)  -> true if a bubble was shown
+--       ax_ctx: set when the result was written through Accessibility; undo then
+--       restores it the same way (the app's own ⌘Z may not know about the write)
 --   M.dismiss()
 --   M.destroy()
 
@@ -320,6 +322,19 @@ local function undo(passthrough)
         return
     end
 
+    if s.ax then
+        local ok, why = require("flickwise.lib.ax_text").restore(s.ax)
+        if ok then
+            hud.info("Restored original")
+            notifier.log("Undo via Accessibility")
+        else
+            hs.pasteboard.setContents(s.original)
+            hud.error("Couldn't undo (" .. tostring(why) .. ") — original copied to clipboard")
+            notifier.log("Undo via Accessibility failed: " .. tostring(why))
+        end
+        return
+    end
+
     -- A click on the bubble can pull focus to Hammerspoon; hand it back first.
     if s.win and not same_window(s.win) then pcall(function() s.win:focus() end) end
     hs.timer.doAfter(0.08, function()
@@ -375,7 +390,8 @@ local function on_event(e)
     end
 
     -- ⌘Z + "app" method: let the app's own undo handle it, just close the bubble.
-    local passthrough = _settings.undo_method == "app" and mods.cmd and key == "z"
+    -- Not for direct (Accessibility) replacements: those are undone the same way.
+    local passthrough = not _session.ax and _settings.undo_method == "app" and mods.cmd and key == "z"
         and not (mods.shift or mods.ctrl or mods.alt)
     undo(passthrough)
     return not passthrough
@@ -447,7 +463,7 @@ function M.configure(settings)
     if not (settings and settings.enabled) then M.destroy() end
 end
 
-function M.show(original, result, mode_name, win)
+function M.show(original, result, mode_name, win, ax_ctx)
     if not (_settings and _settings.enabled) then return false end
     M.dismiss()
 
@@ -455,7 +471,7 @@ function M.show(original, result, mode_name, win)
     if stats.changes == 0 then return false end
 
     if not _wv then build_webview() end
-    _session = { original = original, result = result, win = win,
+    _session = { original = original, result = result, win = win, ax = ax_ctx,
                  total = _settings.duration_seconds, remaining = _settings.duration_seconds }
 
     local keys = hotkey_caps(_settings.undo_hotkey)

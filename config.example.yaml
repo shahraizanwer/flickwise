@@ -34,6 +34,10 @@ features:
     hold_ms: 150              # modifier triggers: hold this long before the ring opens (a quick tap does nothing)
     anchor: "mouse"           # mouse | caret (caret falls back to mouse when the app doesn't expose it)
     modes: []                 # mode names clockwise from the top, e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+  direct_replace:
+    enabled: true             # read & replace the selection via Accessibility; your clipboard is never touched
+    web_content: "paste"      # web pages/Electron apps (Chrome, Slack…): "paste" (safe) or "direct"
+    exclude_apps: []          # apps that always use copy/paste, e.g. ["Terminal"]
 
 modes:
   - name: "Fix Grammar"

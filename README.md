@@ -80,7 +80,7 @@ On another Mac, paste this into Claude Code:
 
 Or **hold Right ⌥** and flick toward a mode (see *Radial menu* below).
 
-The selected text is replaced in place. Your clipboard is restored to what it was before.
+The selected text is replaced in place. Your clipboard is left alone: Flickwise writes into the text field directly, and when it has to fall back to copy/paste, it puts your clipboard back afterwards.
 
 ### The floating pill
 When a mode runs, a pill appears at the bottom-center of your screen with a live waveform and the mode name, then a green check with how long it took (or a red message if something went wrong). It is hidden while idle. To keep a small resting pill on screen, turn on **menu bar → Features → Resting Pill When Idle**.
@@ -110,6 +110,11 @@ Select text, then **hold the Right ⌥ (Option) key**. Your modes spring out in 
 
 The first mode is always at the top and the rest go clockwise, so the directions become muscle memory. Choose which modes appear, and in what order, with `features.radial_menu.modes`. A quick tap of Right ⌥ does nothing, and ⌥-characters (like ⌥E) still type normally. Prefer a chord? Set `trigger: ["ctrl", "alt", "space"]`.
 
+### Replace without the clipboard
+Flickwise reads the selected text and writes the result **directly into the text field** through macOS Accessibility. There's no ⌘C/⌘V, so your clipboard keeps whatever you copied, and it's faster. Where an app doesn't support that, it falls back to copy/paste automatically (and restores your clipboard).
+
+In web pages and Electron apps (Chrome, Safari pages, Slack, VS Code…), the result is pasted rather than written directly, because web apps can miss direct writes. If an app misbehaves, add it to `exclude_apps`.
+
 ### Features (turn things on or off)
 Every optional feature lives under `features:` in `config.yaml`, and the on/off switches are also under **menu bar → Features**:
 
@@ -129,6 +134,10 @@ features:
     hold_ms: 150
     anchor: "mouse"           # mouse | caret
     modes: []                 # e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+  direct_replace:
+    enabled: true             # no clipboard: read/replace through Accessibility
+    web_content: "paste"      # paste | direct (for web pages & Electron apps)
+    exclude_apps: []          # e.g. ["Terminal"] to always use copy/paste
 ```
 
 ### Mode picker (`⌘⇧P`)
@@ -181,7 +190,10 @@ Save the file. Flickwise detects the change and reloads within ~1 second — no 
 - Check the log: menu bar → **Advanced → Open Logs**, or `open ~/.hammerspoon/flickwise/flickwise.log`.
 
 **"Select some text first" even though text is highlighted**
-- Some apps are slow to put the selection on the clipboard. Try again, or select a bit more text.
+- Flickwise reads the selection through Accessibility first, then falls back to ⌘C. Some apps are slow to put the selection on the clipboard: try again, or select a bit more text.
+
+**Text replaced oddly in one particular app**
+- Add the app to `features.direct_replace.exclude_apps` (e.g. `["Terminal"]`) to make it always use copy/paste.
 
 **"API key not set" / "Invalid API key"**
 - Menu bar → **API Key…**, or edit `gemini_api_key` in `config.yaml` (it reloads on save).

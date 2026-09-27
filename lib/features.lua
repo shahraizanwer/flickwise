@@ -19,6 +19,11 @@ M.DEFAULTS = {
         undo_method      = "app", -- "app" = send ⌘Z to the app, "reselect" = select the result and paste the original
         context_words    = 8,     -- unchanged words kept around each change; longer stretches collapse to "…"
     },
+    direct_replace = {
+        enabled      = true,      -- read/replace the selection through Accessibility, not the clipboard
+        web_content  = "paste",   -- web pages & Electron apps: "paste" (safe) or "direct" (may confuse web apps)
+        exclude_apps = {},        -- app names that always use the clipboard method, e.g. { "Terminal" }
+    },
     radial_menu = {
         enabled = true,           -- hold the trigger, flick toward a mode, release to apply
         trigger = "right_option", -- right_option | right_command | right_control | right_shift, or a chord like { "ctrl", "alt", "space" }
@@ -37,6 +42,7 @@ M.MENU = {
     { key = "idle_pill",   title = "Resting Pill When Idle" },
     { key = "diff_bubble", title = "“What Changed” Bubble + Undo" },
     { key = "radial_menu", title = "Radial Menu at Cursor" },
+    { key = "direct_replace", title = "Replace Without Clipboard" },
 }
 
 local UNDO_METHODS = { app = true, reselect = true }
@@ -82,6 +88,12 @@ function M.normalize(raw, notifier)
         db.undo_hotkey = M.DEFAULTS.diff_bubble.undo_hotkey
     end
     if db.duration_seconds <= 0 then db.duration_seconds = M.DEFAULTS.diff_bubble.duration_seconds end
+
+    local dr = out.direct_replace
+    if dr.web_content ~= "paste" and dr.web_content ~= "direct" then
+        warn(notifier, "direct_replace.web_content must be 'paste' or 'direct' — using 'paste'")
+        dr.web_content = "paste"
+    end
 
     local rm = out.radial_menu
     if type(rm.trigger) == "string" and not M.MODIFIER_TRIGGERS[rm.trigger] then

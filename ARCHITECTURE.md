@@ -4,7 +4,7 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-09-27 (published to GitHub with a one-command installer and TextFixer migration)._
+_Last updated: 2026-09-27 (direct replace: read and write the selection through Accessibility, with no clipboard)._
 
 ---
 
@@ -23,7 +23,8 @@ _Last updated: 2026-09-27 (published to GitHub with a one-command installer and 
 | `lib/config_loader.lua` | Parses `config.yaml` (via `tinyyaml`), validates it, and returns a normalized config table (see "Config shape"). |
 | `lib/features.lua` | **Single source of truth for optional features.** Holds defaults, normalizes `features:` from YAML, provides the menu list, and rewrites `features.<key>.enabled` in `config.yaml`. |
 | `lib/hotkey_manager.lua` | Binds a global hotkey for each mode, which calls `text_replacer.run`. |
-| `lib/text_replacer.lua` | Core flow: capture the selection → call the backend → paste the result → sound, HUD and diff bubble. Guards against overlapping runs (`_in_flight`). |
+| `lib/text_replacer.lua` | Core flow: capture the selection → call the backend → replace the selection → sound, HUD and diff bubble. Tries direct (Accessibility) first, then falls back to ⌘C/⌘V. Guards against overlapping runs (`_in_flight`). |
+| `lib/ax_text.lua` | Accessibility text I/O (`features.direct_replace`): reads `AXSelectedText` and its range, detects web content, writes with `AXSelectedText` and verifies the write, and `restore()` for undo. |
 | `lib/ai_client.lua` / `lib/glean_client.lua` | `transform(text, mode, cfg, on_ok, on_err)`, async. `ai_client` trims the output and strips wrapping quotes. |
 | `lib/hud.lua` | Bottom-center status pill (working, done, error, info). An optional resting "idle" pill is controlled by `features.idle_pill`. |
 | `lib/diff_bubble.lua` | "What changed" card above the pill with a word diff and undo (`features.diff_bubble`). |
@@ -42,21 +43,26 @@ _Last updated: 2026-09-27 (published to GitHub with a one-command installer and 
 ```
 hotkey ─► text_replacer.run(mode, cfg)
             ├─ diff_bubble.dismiss()            (a new run always closes an old bubble)
-            ├─ save clipboard, send ⌘C, poll the clipboard (up to 3 s)
-            │    └─ fallback: AXSelectedText via Accessibility
+            ├─ capture_direct(): ax_text.read_selection()   (direct_replace on, app not excluded)
+            │    └─ got text → dispatch(text, nil, mode, cfg, ax_ctx)       (no ⌘C, clipboard untouched)
+            ├─ else: save clipboard, send ⌘C, poll the clipboard (up to 3 s)
+            │    └─ fallback: AXSelectedText (text only)
             └─ dispatch()
                  ├─ hud.working(mode.name)
                  ├─ client.transform(...)  (async)
                  └─ on success:
-                      ├─ paste the result: clipboard ← result, ⌘V, restore the clipboard
+                      ├─ result == original → nothing written, hud.success("No changes needed")
+                      ├─ ax_ctx and can_write → ax_text.replace()        (direct, verified)
+                      │    ├─ "selection changed while working" → result → clipboard, error, stop
+                      │    └─ other failure → paste fallback
+                      ├─ paste fallback: clipboard ← result, ⌘V, restore the clipboard
                       ├─ play a sound (defaults.sound)
-                      ├─ result == original → hud.success("No changes needed")
-                      └─ otherwise → hud.success("Done", time)
-                                     + diff_bubble.show(original, result, mode, focused window)
-                                       (skipped if the feature is off or the mode sets diff_bubble: false)
+                      └─ hud.success("Done", time)
+                           + diff_bubble.show(original, result, mode, focused window, ax_ctx if direct)
+                             (skipped if the feature is off or the mode sets diff_bubble: false)
 ```
 
-The picker path is the same after capture: `mode_picker` → `text_replacer.run_with_text`.
+The picker path is the same after capture: `mode_picker` tries `text_replacer.capture_direct()` first (with no ⌘C), then its own ⌘C capture, and then calls `text_replacer.run_with_text(..., ax_ctx)`.
 The radial menu captures nothing itself. When the trigger is released it calls `text_replacer.run(mode, cfg)`, so the capture happens after the trigger key is already up.
 
 ## "What changed" bubble + undo (`lib/diff_bubble.lua`)
@@ -72,7 +78,16 @@ The radial menu captures nothing itself. When the trigger is released it calls `
 - **Undo methods** (`undo_method`):
   - `app` (default): the app's own undo reverses the paste. If the undo hotkey is exactly ⌘Z, the user's key is **passed through** to the app. Otherwise it is swallowed and a synthetic ⌘Z is sent.
   - `reselect`: sends shift+← once per character of the result (`utf8.len`), then pastes the original through the clipboard and restores the clipboard. Results over 2000 characters fall back to `app`. This works in apps where ⌘Z doesn't cleanly undo a paste, but it can be off by a few characters with combined emoji (grapheme clusters).
+  - `direct` (automatic, not a setting): when the fix was written through Accessibility, undo uses `ax_text.restore()` instead of either method above.
   - The tap is always stopped **before** synthetic keys are sent, so it never sees them. Clicking "Undo" in the bubble refocuses the original window first.
+
+## Direct replace, without the clipboard (`lib/ax_text.lua`)
+
+- **Read:** the focused element's `AXSelectedText` and `AXSelectedTextRange`. Secure fields, excluded apps (`exclude_apps`) and empty selections return nil, which means the clipboard path is used. `writable` means `AXSelectedText` is settable and a range is known. `web` means the element is inside an `AXWebArea` (or has `AXDOMIdentifier`/`AXDOMClassList`), found by walking up to 40 parents.
+- **Web content** (browsers, Electron apps like Slack or VS Code): with `web_content: "paste"` (the default), the text is still *read* directly, but it's *written* with a paste. Setting `AXSelectedText` in a web page changes the DOM without input events, so frameworks such as React keep the old value.
+- **Write:** `replace()` first makes sure the captured range still holds the captured text (it reselects if needed). If the text differs, the user edited it while the AI was working, so the result goes to the clipboard with an error instead of overwriting anything. It then sets `AXSelectedText` and verifies: `AXValue` changed and contains the result (or, without `AXValue`, `AXNumberOfCharacters` changed as expected). "The app ignored the write" means a paste fallback. "Changed but not verbatim" (e.g. normalized line endings) counts as success, so the text is never inserted twice.
+- **Ranges** are UTF-16 code units (`ax_text.u16len`). After a replace, `ctx.new_range` = `{location, u16len(result)}`.
+- **Undo:** for a direct replacement, the diff bubble never passes ⌘Z through to the app (its undo stack may not include the write). `restore()` selects `new_range`, checks that it still holds the result, writes the original back, and reselects the original. If that fails, the original is copied to the clipboard with an error.
 
 ## Radial menu (`lib/radial_menu.lua`)
 
@@ -103,6 +118,7 @@ The radial menu captures nothing itself. When the trigger is released it calls `
     idle_pill   = { enabled },
     diff_bubble = { enabled, duration_seconds, undo_hotkey, undo_method, context_words },
     radial_menu = { enabled, trigger (string | chord list), hold_ms, anchor, modes },
+    direct_replace = { enabled, web_content ("paste" | "direct"), exclude_apps },
   },
 }
 ```

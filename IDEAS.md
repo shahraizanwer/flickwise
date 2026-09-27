@@ -14,6 +14,7 @@ Tick a box when an idea is picked, and move it to **Done** when shipped.
 - [x] **Native-looking menu bar**: template sparkle icon, right-aligned shortcuts, a Features submenu, and an Advanced submenu. (`lib/menubar_ui.lua`)
 - [x] **2.1 "What changed" bubble + undo**: a card above the pill shows a word-level diff after each fix. ⌘Z (configurable) restores the original while the bubble is visible, it auto-dismisses and pauses while hovered, and it can be turned off per mode. (`lib/diff_bubble.lua`, `lib/word_diff.lua`)
 - [x] **3.1 Radial menu at the cursor**: hold **Right ⌥**, flick toward a mode, and release to apply. Slot 1 is at the top, then clockwise. Also supports 1–8, click, and esc. The trigger can be a right-hand modifier or a chord. (`lib/radial_menu.lua`)
+- [x] **1.4 Replace without touching the clipboard**: the selection is read and replaced through Accessibility and verified. It falls back to ⌘C/⌘V automatically. Web and Electron apps are read directly but written with a paste. Undo restores through Accessibility too. (`lib/ax_text.lua`)
 - [x] **Feature flags**: every optional feature is switched under `features:` in `config.yaml`, or from menu bar → Features. (`lib/features.lua`)
 
 ---
@@ -61,7 +62,7 @@ Tick a box when an idea is picked, and move it to **Done** when shipped.
 
 ---
 
-### [ ] 1.4 Replace without touching the clipboard 🟡
+### [x] 1.4 Replace without touching the clipboard 🟡 (shipped 2026-09-27, see Done)
 **Today:** Cmd+C → wait ~250ms → call AI → Cmd+V → restore clipboard.
 **Idea:** read and write the selection directly through Accessibility (`AXSelectedText`).
 
@@ -227,3 +228,4 @@ Then add **3.1 Radial menu** for the less common modes.
 - 2026-09-27 — Resting idle pill now defaults to **off**; the pill appears only while processing.
 - 2026-09-27 — Shipped **2.1** (diff bubble + undo). Added the `features:` config section as the one place to enable or disable features. The idle pill toggle moved there from `hs.settings`. Undo defaults to the app's own ⌘Z. `undo_method: reselect` is available for apps where that misbehaves.
 - 2026-09-27 — Shipped **3.1** radial menu. The trigger is **hold Right ⌥**, chosen after checking existing shortcuts: Flickwise uses ⌘⇧G/C/E/M/U/P, Wispr Flow uses Fn (push-to-talk), Fn+Space, ⌃Fn, ⌘⌃V/C and *left* ⌥+M, and ChatGPT uses ⌥Space and ⌥⇧1. Nothing uses Right ⌥ on its own. A 150 ms hold threshold keeps ⌥-character typing working.
+- 2026-09-27 — Shipped **1.4** (`features.direct_replace`, on by default). Tested in TextEdit: the text was replaced and restored with a clipboard changeCount delta of 0. Web writes default to paste, because AX writes bypass the input events that web frameworks listen for. Also fixed `hs.axuielement.systemElement()`, which should be `systemWideElement()`: the old TextFixer Accessibility fallback and the radial menu's caret anchor had never worked.

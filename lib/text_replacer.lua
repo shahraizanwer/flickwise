@@ -1,7 +1,10 @@
--- text_replacer.lua — clipboard capture, API dispatch, and paste-back
+-- text_replacer.lua — capture the selection, call the AI, replace the selection
+-- Capture/replace uses Accessibility directly when features.direct_replace is on
+-- (no clipboard; see ax_text.lua), and falls back to ⌘C / ⌘V with clipboard restore.
 -- Public API:
 --   text_replacer.run(mode, cfg)
---   text_replacer.run_with_text(selected_text, original_clipboard, mode, cfg)
+--   text_replacer.run_with_text(selected_text, original_clipboard, mode, cfg, ax_ctx)
+--   text_replacer.capture_direct(cfg)   -> ax_ctx or nil  (used by the picker)
 --   text_replacer.is_in_flight()
 
 local M = {}
@@ -10,41 +13,43 @@ local PASTE_SLEEP_US   = 150000
 
 local _in_flight = false
 
--- Try to capture text using accessibility API as fallback
+-- Last-resort capture when ⌘C put nothing on the clipboard (text only; the
+-- result is still pasted).
 local function capture_text_via_accessibility()
-    local notifier = require("flickwise.lib.notifier")
-    notifier.debug("Attempting to capture text via accessibility API...")
-    
-    -- Get the focused element
-    local app = hs.application.frontmostApplication()
-    if not app then
-        notifier.debug("No frontmost app found")
-        return nil
-    end
-    
-    local appElement = app:getWindow()
-    if not appElement then
-        notifier.debug("Could not get app window element")
-        return nil
-    end
-    
-    -- Try to find focused text field and get selected text
-    local sysElement = hs.axuielement.systemElement()
-    if sysElement then
-        local focusedElement = sysElement:attributeValue("AXFocusedUIElement")
-        if focusedElement then
-            local selectedText = focusedElement:attributeValue("AXSelectedText")
-            if selectedText and selectedText ~= "" then
-                notifier.debug("Captured via accessibility: " .. (#selectedText) .. " chars")
-                return selectedText
-            end
-        end
-    end
-    
-    return nil
+    local ctx = require("flickwise.lib.ax_text").read_selection(nil)
+    return ctx and ctx.text or nil
 end
 
-local function dispatch(selected_text, original_clipboard, mode, cfg)
+local function direct_settings(cfg)
+    local f = cfg.features and cfg.features.direct_replace
+    return (f and f.enabled) and f or nil
+end
+
+-- Selection via Accessibility, or nil when the feature is off / unsupported here.
+function M.capture_direct(cfg)
+    local settings = direct_settings(cfg)
+    if not settings then return nil end
+    local ctx, why = require("flickwise.lib.ax_text").read_selection(settings)
+    local notifier = require("flickwise.lib.notifier")
+    if ctx then
+        notifier.log("Captured via Accessibility (" .. tostring(ctx.app) .. ", "
+            .. (ctx.web and "web content" or "native") .. ", writable=" .. tostring(ctx.writable) .. ")")
+    else
+        notifier.debug("Direct capture unavailable: " .. tostring(why) .. " — using the clipboard")
+    end
+    return ctx
+end
+
+local function paste(text, original_clipboard)
+    local saved = original_clipboard
+    if saved == nil then saved = hs.pasteboard.getContents() end
+    hs.pasteboard.setContents(text)
+    hs.eventtap.keyStroke({"cmd"}, "v")
+    hs.timer.usleep(PASTE_SLEEP_US)
+    if saved then hs.pasteboard.setContents(saved) end
+end
+
+local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
     local notifier = require("flickwise.lib.notifier")
     local hud      = require("flickwise.lib.hud")
     local started  = hs.timer.secondsSinceEpoch()
@@ -62,11 +67,31 @@ local function dispatch(selected_text, original_clipboard, mode, cfg)
             notifier.debug("Transformed (" .. #transformed .. " chars): "
                 .. transformed:sub(1, 100))
 
-            hs.pasteboard.setContents(transformed)
-            hs.eventtap.keyStroke({"cmd"}, "v")
-            hs.timer.usleep(PASTE_SLEEP_US)
-
-            if original_clipboard then
+            local unchanged = (transformed == selected_text)
+            local direct = false
+            if not unchanged then
+                local ax = require("flickwise.lib.ax_text")
+                local settings = direct_settings(cfg)
+                local can, why = false, "captured with the clipboard"
+                if ax_ctx then can, why = ax.can_write(ax_ctx, settings) end
+                if can then
+                    direct, why = ax.replace(ax_ctx, transformed)
+                    if direct and why then notifier.log("Direct replace: " .. why) end
+                end
+                if direct then
+                    notifier.log("Replaced via Accessibility (clipboard untouched)")
+                elseif why == "selection changed while working" then
+                    -- Pasting now could overwrite different text; hand the result over instead.
+                    hs.pasteboard.setContents(transformed)
+                    hud.error("Text changed while working — result copied to clipboard")
+                    notifier.log("Not replaced: " .. why)
+                    _in_flight = false
+                    return
+                else
+                    notifier.debug("Paste fallback: " .. tostring(why))
+                    paste(transformed, original_clipboard)
+                end
+            elseif original_clipboard then
                 hs.pasteboard.setContents(original_clipboard)
             end
 
@@ -83,7 +108,8 @@ local function dispatch(selected_text, original_clipboard, mode, cfg)
                 hud.success("Done", elapsed)
                 if mode.diff_bubble ~= false then
                     require("flickwise.lib.diff_bubble").show(
-                        selected_text, transformed, mode.name, hs.window.focusedWindow())
+                        selected_text, transformed, mode.name, hs.window.focusedWindow(),
+                        direct and ax_ctx or nil)
                 end
             end
             notifier.log("Mode '" .. mode.name .. "' completed successfully")
@@ -119,6 +145,12 @@ function M.run(mode, cfg)
     require("flickwise.lib.diff_bubble").dismiss()
 
     notifier.debug("=== Flickwise Capture Started ===")
+
+    local ax_ctx = M.capture_direct(cfg)
+    if ax_ctx then
+        dispatch(ax_ctx.text, nil, mode, cfg, ax_ctx)
+        return
+    end
     
     -- Get the current clipboard content BEFORE trying to copy
     local original_clipboard = hs.pasteboard.getContents()
@@ -179,7 +211,7 @@ function M.run(mode, cfg)
     dispatch(selected_text, original_clipboard, mode, cfg)
 end
 
-function M.run_with_text(selected_text, original_clipboard, mode, cfg)
+function M.run_with_text(selected_text, original_clipboard, mode, cfg, ax_ctx)
     if _in_flight then
         require("flickwise.lib.hud").info("Still working on the last one…")
         return
@@ -187,7 +219,7 @@ function M.run_with_text(selected_text, original_clipboard, mode, cfg)
     _in_flight = true
     require("flickwise.lib.diff_bubble").dismiss()
 
-    dispatch(selected_text, original_clipboard, mode, cfg)
+    dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
 end
 
 function M.is_in_flight()
