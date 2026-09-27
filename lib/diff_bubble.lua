@@ -360,6 +360,11 @@ local function undo(passthrough)
     local hud      = require("flickwise.lib.hud")
     M.dismiss()   -- stops the tap first, so our synthetic keys aren't seen by it
 
+    -- An undone fix doesn't count as mistakes in My Progress.
+    if not s.ax then
+        require("flickwise.lib.history").mark_undone(require("flickwise.lib.history").last_id())
+    end
+
     if passthrough then
         hud.info("Restored original")
         notifier.log("Undo via app ⌘Z (passthrough)")
@@ -369,6 +374,7 @@ local function undo(passthrough)
     if s.ax then
         local ok, why = require("flickwise.lib.ax_text").restore(s.ax)
         if ok then
+            require("flickwise.lib.history").mark_undone(require("flickwise.lib.history").last_id())
             hud.info("Restored original")
             notifier.log("Undo via Accessibility")
         else

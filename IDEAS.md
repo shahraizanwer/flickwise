@@ -16,6 +16,7 @@ Tick a box when an idea is picked, and move it to **Done** when shipped.
 - [x] **3.1 Radial menu at the cursor**: hold **Right ⌥**, flick toward a mode, and release to apply. Slot 1 is at the top, then clockwise. Also supports 1–8, click, and esc. The trigger can be a right-hand modifier or a chord. (`lib/radial_menu.lua`)
 - [x] **1.4 Replace without touching the clipboard**: the selection is read and replaced through Accessibility and verified. It falls back to ⌘C/⌘V automatically. Web and Electron apps are read directly but written with a paste. Undo restores through Accessibility too. (`lib/ax_text.lua`)
 - [x] **Explain Meaning (⌃⌘M)**: shows what the selected text means in simple words (including requests, deadlines, and tone), plus an exact Roman Urdu translation of the text, in a two-row card, without changing the text. Built on a new per-mode `output: "show"` option and the answer card (`features.result_card`).
+- [x] **2.4 Fix history + personal mistake tracker**: menu bar → History & Progress…. It keeps a searchable local history of fixes and answers, plus My Progress (mistake types, repeated corrections, weekly trend). Stored per Mac, never uploaded. (`lib/history.lua`, `lib/history_window.lua`)
 - [x] **Feature flags**: every optional feature is switched under `features:` in `config.yaml`, or from menu bar → Features. (`lib/features.lua`)
 
 ---
@@ -121,7 +122,7 @@ app_profiles:
 
 ---
 
-### [ ] 2.4 Personal mistake tracker 🟡
+### [x] 2.4 Personal mistake tracker 🟡 (shipped 2026-09-27, see Done)
 **Idea:** log what you commonly get wrong (from the diffs in 2.1) and show a small weekly summary.
 
 - e.g., "Top mistakes this week: missing articles (a/the) ×14, plural -s ×9, *ton* → *to* ×3".
@@ -231,3 +232,4 @@ Then add **3.1 Radial menu** for the less common modes.
 - 2026-09-27 — Shipped **3.1** radial menu. The trigger is **hold Right ⌥**, chosen after checking existing shortcuts: Flickwise uses ⌘⇧G/C/E/M/U/P, Wispr Flow uses Fn (push-to-talk), Fn+Space, ⌃Fn, ⌘⌃V/C and *left* ⌥+M, and ChatGPT uses ⌥Space and ⌥⇧1. Nothing uses Right ⌥ on its own. A 150 ms hold threshold keeps ⌥-character typing working.
 - 2026-09-27 — Shipped **1.4** (`features.direct_replace`, on by default). Tested in TextEdit: the text was replaced and restored with a clipboard changeCount delta of 0. Web writes default to paste, because AX writes bypass the input events that web frameworks listen for. Also fixed `hs.axuielement.systemElement()`, which should be `systemWideElement()`: the old TextFixer Accessibility fallback and the radial menu's caret anchor had never worked.
 - 2026-09-27 — Added **Explain Meaning** (user request: understanding what a message means). New `output: "show"` modes keep the selection untouched and show the answer in a card with a timer, hover-to-hold, and Copy. The hotkey is ⌃⌘M, since ⌘⇧M is Clarify Message and ⌃⌘M is free on this Mac. Idea for later: "Explain Code" could also become a show mode instead of replacing the code.
+- 2026-09-27 — Shipped **2.4** as fix history + My Progress. Decided on **one tracker per Mac** (local `data/history.jsonl`, git-ignored). That keeps work text on the work laptop, needs no server, and gives every user their own tracker automatically. Full text is stored (the user wants to browse past messages), with 90-day retention, `exclude_apps`, and Clear all. A possible later addition is Export/Import to combine Macs. A clipboard history (Windows + V style) was considered and skipped for now, because macOS 26 has one built into Spotlight (⌘Space, then ⌘4).

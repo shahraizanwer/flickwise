@@ -19,6 +19,12 @@ M.DEFAULTS = {
         undo_method      = "app", -- "app" = send ⌘Z to the app, "reselect" = select the result and paste the original
         context_words    = 8,     -- unchanged words kept around each change; longer stretches collapse to "…"
     },
+    history = {
+        enabled        = true,    -- keep a local history of fixes (data/history.jsonl, this Mac only)
+        retention_days = 90,      -- older entries are deleted automatically
+        exclude_apps   = {},      -- apps never recorded, e.g. { "1Password" }
+        mistake_modes  = { "Fix Grammar" },  -- modes whose corrections count as mistakes in My Progress
+    },
     result_card = {
         enabled          = true,  -- "show" modes (e.g. Explain Meaning) display their answer in a card;
                                   -- when off, the answer is copied to the clipboard instead
@@ -49,6 +55,7 @@ M.MENU = {
     { key = "radial_menu", title = "Radial Menu at Cursor" },
     { key = "direct_replace", title = "Replace Without Clipboard" },
     { key = "result_card",    title = "Answer Card for Explain Modes" },
+    { key = "history",        title = "Fix History & My Progress" },
 }
 
 local UNDO_METHODS = { app = true, reselect = true }
@@ -98,6 +105,8 @@ function M.normalize(raw, notifier)
     if out.result_card.duration_seconds <= 0 then
         out.result_card.duration_seconds = M.DEFAULTS.result_card.duration_seconds
     end
+
+    if out.history.retention_days < 1 then out.history.retention_days = M.DEFAULTS.history.retention_days end
 
     local dr = out.direct_replace
     if dr.web_content ~= "paste" and dr.web_content ~= "direct" then

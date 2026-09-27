@@ -41,6 +41,11 @@ features:
   result_card:
     enabled: true             # "show" modes (like Explain Meaning) show their answer in a card; off = copy it to the clipboard
     duration_seconds: 15      # auto-dismiss; hover to keep it open
+  history:
+    enabled: true             # keep a history of your fixes (menu bar → History & Progress…); stored only on this Mac
+    retention_days: 90        # older entries are deleted automatically
+    exclude_apps: []          # apps never recorded, e.g. ["1Password"]
+    mistake_modes: ["Fix Grammar"]  # modes whose corrections count as mistakes in My Progress
 
 modes:
   - name: "Fix Grammar"

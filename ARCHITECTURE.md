@@ -4,7 +4,7 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-09-27 (show modes: `output: "show"` + the answer card, and the Explain Meaning mode)._
+_Last updated: 2026-09-27 (fix history + My Progress mistake tracker)._
 
 ---
 
@@ -28,6 +28,8 @@ _Last updated: 2026-09-27 (show modes: `output: "show"` + the answer card, and t
 | `lib/ai_client.lua` / `lib/glean_client.lua` | `transform(text, mode, cfg, on_ok, on_err)`, async. `ai_client` trims the output and strips wrapping quotes. |
 | `lib/hud.lua` | Bottom-center status pill (working, done, error, info). An optional resting "idle" pill is controlled by `features.idle_pill`. |
 | `lib/diff_bubble.lua` | Card above the pill, in two kinds: the "what changed" word diff with undo (`features.diff_bubble`), and the read-only **answer card** for `output: "show"` modes (`features.result_card`). |
+| `lib/history.lua` | Local fix history (`data/history.jsonl`) and the mistake tracker: record, prune, undo-marking, and `stats()` (`features.history`). |
+| `lib/history_window.lua` | **History & Progress…** window: searchable history with diffs and Copy/Delete, plus the My Progress tab. |
 | `lib/word_diff.lua` | Pure-Lua word-level diff: tokenize, trim the common prefix and suffix, run LCS, and group edits. No AI call. |
 | `lib/radial_menu.lua` | Hold-and-flick ring of modes at the pointer (`features.radial_menu`). Applies through `text_replacer.run`. |
 | `lib/mode_picker.lua` | ⌘⇧P command palette above the pill. Captures the selection, then calls `text_replacer.run_with_text`. |
@@ -60,7 +62,7 @@ hotkey ─► text_replacer.run(mode, cfg)
                       │    └─ other failure → paste fallback
                       ├─ paste fallback: clipboard ← result, ⌘V, restore the clipboard
                       ├─ play a sound (defaults.sound)
-                      └─ hud.success("Done", time)
+                      └─ hud.success("Done", time) + history.record(...)
                            + diff_bubble.show(original, result, mode, focused window, ax_ctx if direct)
                              (skipped if the feature is off or the mode sets diff_bubble: false)
 ```
@@ -83,6 +85,17 @@ The radial menu captures nothing itself. When the trigger is released it calls `
   - `reselect`: sends shift+← once per character of the result (`utf8.len`), then pastes the original through the clipboard and restores the clipboard. Results over 2000 characters fall back to `app`. This works in apps where ⌘Z doesn't cleanly undo a paste, but it can be off by a few characters with combined emoji (grapheme clusters).
   - `direct` (automatic, not a setting): when the fix was written through Accessibility, undo uses `ax_text.restore()` instead of either method above.
   - The tap is always stopped **before** synthetic keys are sent, so it never sees them. Clicking "Undo" in the bubble refocuses the original window first.
+
+## Fix history & My Progress (`lib/history.lua`, `lib/history_window.lua`)
+
+- **Storage:** `data/history.jsonl` in the install folder, one JSON object per line, appended on every successful fix (`output: "replace"`, only when the text changed) and every show-mode answer (`output: "show"`). `data/` is git-ignored, so history stays on each Mac: a work laptop and a personal laptop each have their own. Nothing is uploaded.
+- **Entry:** `{ id, ts, mode, output, app, original, result, tracked?, mistakes?, undone? }`. The app comes from `ax_ctx.app` or the frontmost app when the fix started.
+- **Pruning:** on the first load after (re)configure, entries older than `retention_days` (and beyond 5000) are dropped and the file is rewritten.
+- **Mistakes:** only for modes in `mistake_modes` (default `["Fix Grammar"]`, so rewrites like Make Concise don't count). At record time the word diff's del/ins groups become `{ from, to, cat }`. `classify()` checks, in order: Capitalization, Apostrophes, Punctuation, Articles (a/an/the), Singular/plural, Verb form (aux verbs), Prepositions, Spelling (edit distance ≤ 2), Rewording (more than 6 words), and otherwise Word choice.
+- **Undo:** the diff bubble calls `history.mark_undone(history.last_id())`. Undone entries stay in History (with an "undone" badge) but are excluded from My Progress.
+- **`stats()`:** this week vs last week (fixes, mistakes), per-category counts (this week and total), the 12 most repeated `from → to` pairs (excluding Rewording), and an 8-week series.
+- **Window:** a normal titled window (menu bar → **History & Progress…**) that is focused on open, because a menu bar app's windows don't come forward on their own. Data is pushed as JSON with `load()`, and the page normalizes lists because empty Lua tables may arrive as `{}`. Entry diffs are computed on demand (`detail`). **Clear all history** needs a second click to confirm.
+- `features.history`: `enabled`, `retention_days` (90), `exclude_apps`, `mistake_modes`.
 
 ## Show modes & the answer card
 
@@ -130,6 +143,7 @@ The radial menu captures nothing itself. When the trigger is released it calls `
     radial_menu = { enabled, trigger (string | chord list), hold_ms, anchor, modes },
     direct_replace = { enabled, web_content ("paste" | "direct"), exclude_apps },
     result_card    = { enabled, duration_seconds },
+    history        = { enabled, retention_days, exclude_apps, mistake_modes },
   },
 }
 ```
@@ -177,4 +191,5 @@ Environment overrides (`FLICKWISE_REPO`, `FLICKWISE_BRANCH`, `FLICKWISE_HS_DIR`,
 
 - `config.yaml` is user config (hot-reloaded, git-ignored, holds the API key). `config.example.yaml` is the committed template, with an empty key.
 - `flickwise.log` is the runtime log (`notifier`).
+- `data/history.jsonl` is the local fix history (git-ignored, per Mac).
 - `IDEAS.md` is the roadmap. Tick items and move them to **Done** when they ship.

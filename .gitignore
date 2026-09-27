@@ -1,7 +1,8 @@
 # Personal config — contains your API key. The template is config.example.yaml.
 config.yaml
 
-# Runtime
+# Runtime (data/ holds your local fix history; never commit it)
+data/
 *.log
 .DS_Store
 

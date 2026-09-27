@@ -25,10 +25,12 @@ local function main()
     local hud           = safe_require("flickwise.lib.hud")
     local diff_bubble   = safe_require("flickwise.lib.diff_bubble")
     local radial_menu   = safe_require("flickwise.lib.radial_menu")
+    local history       = safe_require("flickwise.lib.history")
+    local history_window= safe_require("flickwise.lib.history_window")
 
     if not (notifier and config_loader and hotkey_manager and menubar_ui
             and watcher and ai_client and prompt_editor and mode_picker
-            and setup_wizard and hud and diff_bubble and radial_menu) then
+            and setup_wizard and hud and diff_bubble and radial_menu and history and history_window) then
         hs.alert.show("Flickwise failed to load — check Hammerspoon console", 5)
         return
     end
@@ -45,6 +47,7 @@ local function main()
         hud.configure(config.features.idle_pill)
         diff_bubble.configure(config.features.diff_bubble)
         diff_bubble.configure_card(config.features.result_card)
+        history.configure(config.features.history)
         menubar_ui.update(config, CONFIG_PATH, callbacks)
         hotkey_manager.bind_all(config.modes, config)
         notifier.log("Config applied — " .. #config.modes .. " modes active")
@@ -70,6 +73,10 @@ local function main()
         prompt_editor.open(active_config, CONFIG_PATH, callbacks.reload)
     end
 
+    callbacks.open_history = function()
+        history_window.open()
+    end
+
     callbacks.open_settings = function()
         if not active_config or (not active_config.use_glean and not active_config.has_api_key) then
             setup_wizard.open(CONFIG_PATH, function()
@@ -85,6 +92,7 @@ local function main()
         hotkey_manager.unbind_all()
         mode_picker.teardown()
         radial_menu.teardown()
+        history_window.close()
         watcher.stop()
         menubar_ui.destroy()
         prompt_editor.close()

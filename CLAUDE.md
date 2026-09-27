@@ -26,7 +26,9 @@ hotkey, and the text is replaced with an AI-transformed version. Start with
    don't copy it into docs, logs, or commits. `config.yaml` is git-ignored. Shared
    defaults go in `config.example.yaml`, which must always have `gemini_api_key: ""`.
 6. **This repo is public** (github.com/shahraizanwer/flickwise). Keep it free of secrets
-   and of company-internal names or details.
+   and of company-internal names or details. User data lives in git-ignored places only:
+   `config.yaml`, `data/` (fix history), and `*.log`. Never commit them, and when testing,
+   clear any test entries you add to the real history (`history.clear()` or delete them).
 7. **Keep `install.sh` working and idempotent.** It's the only supported install and update
    path (`curl … | bash`). If a change needs a migration (renamed files, new required
    config, a changed `init.lua` hook), add it to `install.sh` so re-running the

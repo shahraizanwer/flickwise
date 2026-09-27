@@ -128,6 +128,7 @@ local function build_menu(config, config_path, callbacks)
     table.insert(items, { title = "-" })
 
     table.insert(items, { title = "Edit Modes…", fn = callbacks.open_editor })
+    table.insert(items, { title = "History & Progress…", fn = callbacks.open_history })
     -- Every optional feature is a toggle here; it writes `features.<key>.enabled`
     -- in config.yaml and the file watcher reloads the config.
     local feature_items = {}

@@ -128,6 +128,13 @@ You can turn any mode into a "show" mode like this with `output: "show"`:
       Summarize this in one short sentence.
 ```
 
+### History & My Progress
+Menu bar → **History & Progress…** opens a window with:
+- **History:** every fix and every Explain Meaning answer, newest first, with the app and time. Search it, open an entry to see the red/green diff and the mistakes it contained, and **Copy original**, **Copy fixed**, or **Delete** it.
+- **My Progress:** fixes and mistakes this week vs last week, your mistake types (spelling, articles a/an/the, singular/plural, verb forms, prepositions…), the corrections you repeat most (e.g. *ton → to ×3*), and a weekly chart.
+
+History is saved **only on this Mac** (`~/.hammerspoon/flickwise/data/`), so it's never uploaded or pushed to GitHub, and each of your Macs keeps its own. It's kept for 90 days by default. Only the modes listed in `mistake_modes` (Fix Grammar by default) count toward My Progress, and fixes you undo don't count. Use **Clear all history** in the window to wipe it.
+
 ### Replace without the clipboard
 Flickwise reads the selected text and writes the result **directly into the text field** through macOS Accessibility. There's no ⌘C/⌘V, so your clipboard keeps whatever you copied, and it's faster. Where an app doesn't support that, it falls back to copy/paste automatically (and restores your clipboard).
 
@@ -152,6 +159,11 @@ features:
     hold_ms: 150
     anchor: "mouse"           # mouse | caret
     modes: []                 # e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+  history:
+    enabled: true             # local fix history + My Progress (this Mac only)
+    retention_days: 90
+    exclude_apps: []          # never record these apps, e.g. ["1Password"]
+    mistake_modes: ["Fix Grammar"]
   result_card:
     enabled: true             # answer card for "show" modes (off = copy the answer to the clipboard)
     duration_seconds: 15
@@ -263,6 +275,7 @@ sed -i '' '/require("flickwise")/d' ~/.hammerspoon/init.lua
     ├── init.lua              # entrypoint
     ├── config.yaml           # your settings + API key (git-ignored)
     ├── config.example.yaml   # template
+    ├── data/                 # your local fix history (git-ignored)
     ├── install.sh            # installer / updater
     ├── assets/               # logo + menu bar icon
     └── lib/                  # modules (see ARCHITECTURE.md)

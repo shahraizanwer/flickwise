@@ -57,6 +57,10 @@ local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
         and require("flickwise.lib.glean_client")
         or  require("flickwise.lib.ai_client")
 
+    local history = require("flickwise.lib.history")
+    local front = hs.application.frontmostApplication()
+    local app_name = (ax_ctx and ax_ctx.app) or (front and front:name()) or nil
+
     notifier.debug("Captured text (" .. #selected_text .. " chars): "
         .. selected_text:sub(1, 100))
     hud.working(mode.name)
@@ -75,6 +79,8 @@ local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
                     hs.pasteboard.setContents(transformed)
                     hud.info("Answer copied to clipboard", mode.name)
                 end
+                history.record({ mode = mode.name, output = "show", app = app_name,
+                                 original = selected_text, result = transformed })
                 notifier.log("Mode '" .. mode.name .. "' shown (text not changed)")
                 _in_flight = false
                 return
@@ -119,6 +125,8 @@ local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
                 hud.success("No changes needed", elapsed)
             else
                 hud.success("Done", elapsed)
+                history.record({ mode = mode.name, output = "replace", app = app_name,
+                                 original = selected_text, result = transformed })
                 if mode.diff_bubble ~= false then
                     require("flickwise.lib.diff_bubble").show(
                         selected_text, transformed, mode.name, hs.window.focusedWindow(),
