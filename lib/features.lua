@@ -19,6 +19,11 @@ M.DEFAULTS = {
         undo_method      = "app", -- "app" = send ⌘Z to the app, "reselect" = select the result and paste the original
         context_words    = 8,     -- unchanged words kept around each change; longer stretches collapse to "…"
     },
+    result_card = {
+        enabled          = true,  -- "show" modes (e.g. Explain Meaning) display their answer in a card;
+                                  -- when off, the answer is copied to the clipboard instead
+        duration_seconds = 15,    -- auto-dismiss (paused while hovered)
+    },
     direct_replace = {
         enabled      = true,      -- read/replace the selection through Accessibility, not the clipboard
         web_content  = "paste",   -- web pages & Electron apps: "paste" (safe) or "direct" (may confuse web apps)
@@ -43,6 +48,7 @@ M.MENU = {
     { key = "diff_bubble", title = "“What Changed” Bubble + Undo" },
     { key = "radial_menu", title = "Radial Menu at Cursor" },
     { key = "direct_replace", title = "Replace Without Clipboard" },
+    { key = "result_card",    title = "Answer Card for Explain Modes" },
 }
 
 local UNDO_METHODS = { app = true, reselect = true }
@@ -88,6 +94,10 @@ function M.normalize(raw, notifier)
         db.undo_hotkey = M.DEFAULTS.diff_bubble.undo_hotkey
     end
     if db.duration_seconds <= 0 then db.duration_seconds = M.DEFAULTS.diff_bubble.duration_seconds end
+
+    if out.result_card.duration_seconds <= 0 then
+        out.result_card.duration_seconds = M.DEFAULTS.result_card.duration_seconds
+    end
 
     local dr = out.direct_replace
     if dr.web_content ~= "paste" and dr.web_content ~= "direct" then

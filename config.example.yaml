@@ -38,6 +38,9 @@ features:
     enabled: true             # read & replace the selection via Accessibility; your clipboard is never touched
     web_content: "paste"      # web pages/Electron apps (Chrome, Slack…): "paste" (safe) or "direct"
     exclude_apps: []          # apps that always use copy/paste, e.g. ["Terminal"]
+  result_card:
+    enabled: true             # "show" modes (like Explain Meaning) show their answer in a card; off = copy it to the clipboard
+    duration_seconds: 15      # auto-dismiss; hover to keep it open
 
 modes:
   - name: "Fix Grammar"
@@ -78,3 +81,21 @@ modes:
       Translate the following Urdu text into natural, fluent English. Return only the
       translated text. No preamble, no explanation, no quotes. Do not ask follow-up
       questions. Do not add any closing remarks.
+
+  - name: "Explain Meaning"
+    hotkey: ["ctrl", "cmd", "m"]
+    output: "show"            # show the answer in a card; the selected text is never changed
+    system_prompt: |
+      Explain what the following text means, for a non-native English speaker.
+      The text may be English, Urdu, or Roman Urdu.
+      Answer in exactly this format, two lines, nothing else:
+      Meaning: <what the text means, in simple, everyday English>
+      Roman Urdu: <an exact translation of the original text into Roman Urdu (Urdu written in English letters)>
+      Rules:
+      1. Meaning: 1 to 3 short sentences with simple words. If the writer is asking for
+         something, expecting a reply, setting a deadline, or has a clear tone (upset,
+         urgent, joking, polite), say so plainly. Explain; don't just repeat the text.
+      2. Roman Urdu: translate the original text itself, faithfully and completely, sentence
+         by sentence. Don't explain or summarize it. If the text is already Urdu or Roman
+         Urdu, write it in clean Roman Urdu.
+      3. No preamble, no quotes, no markdown, no follow-up questions.

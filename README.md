@@ -76,6 +76,7 @@ On another Mac, paste this into Claude Code:
 | Explain Code | `⌘⇧E` | Explains selected code in 2 sentences for a teammate |
 | Clarify Message | `⌘⇧M` | Rewrites the message so it's clear and unambiguous |
 | Urdu to English | `⌘⇧U` | Translates Urdu into natural English |
+| Explain Meaning | `⌃⌘M` | Shows what the text means in simple words, plus an exact Roman Urdu translation. **Doesn't change the text** |
 | *(all modes)* | `⌘⇧P` | Command palette: pick any mode |
 
 Or **hold Right ⌥** and flick toward a mode (see *Radial menu* below).
@@ -110,6 +111,23 @@ Select text, then **hold the Right ⌥ (Option) key**. Your modes spring out in 
 
 The first mode is always at the top and the rest go clockwise, so the directions become muscle memory. Choose which modes appear, and in what order, with `features.radial_menu.modes`. A quick tap of Right ⌥ does nothing, and ⌥-characters (like ⌥E) still type normally. Prefer a chord? Set `trigger: ["ctrl", "alt", "space"]`.
 
+### Explain Meaning (understand a message)
+Select any text, whether it's a message someone sent you or something you wrote, and press **⌃⌘M** (or pick *Explain Meaning* in the radial menu or ⌘⇧P). A card shows two rows:
+- **Meaning:** what it means in 1–3 simple sentences, including whether they're asking for something, a deadline, or the tone
+- **Roman Urdu:** an exact translation of the selected text into Roman Urdu
+
+**Your text is never changed.** Hover to keep the card open, click **Copy** to copy the explanation, or press any key to close it.
+
+You can turn any mode into a "show" mode like this with `output: "show"`:
+
+```yaml
+  - name: "Summarize"
+    hotkey: ["ctrl", "cmd", "s"]
+    output: "show"            # show the answer in a card instead of replacing the text
+    system_prompt: |
+      Summarize this in one short sentence.
+```
+
 ### Replace without the clipboard
 Flickwise reads the selected text and writes the result **directly into the text field** through macOS Accessibility. There's no ⌘C/⌘V, so your clipboard keeps whatever you copied, and it's faster. Where an app doesn't support that, it falls back to copy/paste automatically (and restores your clipboard).
 
@@ -134,6 +152,9 @@ features:
     hold_ms: 150
     anchor: "mouse"           # mouse | caret
     modes: []                 # e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+  result_card:
+    enabled: true             # answer card for "show" modes (off = copy the answer to the clipboard)
+    duration_seconds: 15
   direct_replace:
     enabled: true             # no clipboard: read/replace through Accessibility
     web_content: "paste"      # paste | direct (for web pages & Electron apps)

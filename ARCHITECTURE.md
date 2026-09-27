@@ -4,7 +4,7 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-09-27 (direct replace: read and write the selection through Accessibility, with no clipboard)._
+_Last updated: 2026-09-27 (show modes: `output: "show"` + the answer card, and the Explain Meaning mode)._
 
 ---
 
@@ -27,7 +27,7 @@ _Last updated: 2026-09-27 (direct replace: read and write the selection through 
 | `lib/ax_text.lua` | Accessibility text I/O (`features.direct_replace`): reads `AXSelectedText` and its range, detects web content, writes with `AXSelectedText` and verifies the write, and `restore()` for undo. |
 | `lib/ai_client.lua` / `lib/glean_client.lua` | `transform(text, mode, cfg, on_ok, on_err)`, async. `ai_client` trims the output and strips wrapping quotes. |
 | `lib/hud.lua` | Bottom-center status pill (working, done, error, info). An optional resting "idle" pill is controlled by `features.idle_pill`. |
-| `lib/diff_bubble.lua` | "What changed" card above the pill with a word diff and undo (`features.diff_bubble`). |
+| `lib/diff_bubble.lua` | Card above the pill, in two kinds: the "what changed" word diff with undo (`features.diff_bubble`), and the read-only **answer card** for `output: "show"` modes (`features.result_card`). |
 | `lib/word_diff.lua` | Pure-Lua word-level diff: tokenize, trim the common prefix and suffix, run LCS, and group edits. No AI call. |
 | `lib/radial_menu.lua` | Hold-and-flick ring of modes at the pointer (`features.radial_menu`). Applies through `text_replacer.run`. |
 | `lib/mode_picker.lua` | ⌘⇧P command palette above the pill. Captures the selection, then calls `text_replacer.run_with_text`. |
@@ -51,6 +51,9 @@ hotkey ─► text_replacer.run(mode, cfg)
                  ├─ hud.working(mode.name)
                  ├─ client.transform(...)  (async)
                  └─ on success:
+                      ├─ mode.output == "show" → restore the clipboard (⌘C path), hud.success,
+                      │    diff_bubble.show_text(answer) (or answer → clipboard if the card is off). Stop:
+                      │    the selection is never written.
                       ├─ result == original → nothing written, hud.success("No changes needed")
                       ├─ ax_ctx and can_write → ax_text.replace()        (direct, verified)
                       │    ├─ "selection changed while working" → result → clipboard, error, stop
@@ -80,6 +83,13 @@ The radial menu captures nothing itself. When the trigger is released it calls `
   - `reselect`: sends shift+← once per character of the result (`utf8.len`), then pastes the original through the clipboard and restores the clipboard. Results over 2000 characters fall back to `app`. This works in apps where ⌘Z doesn't cleanly undo a paste, but it can be off by a few characters with combined emoji (grapheme clusters).
   - `direct` (automatic, not a setting): when the fix was written through Accessibility, undo uses `ax_text.restore()` instead of either method above.
   - The tap is always stopped **before** synthetic keys are sent, so it never sees them. Clicking "Undo" in the bubble refocuses the original window first.
+
+## Show modes & the answer card
+
+- A mode with `output: "show"` (parsed in `config_loader`; the default is `"replace"`) asks the AI a question about the selection instead of rewriting it. The shipped example is **Explain Meaning** (⌃⌘M): a plain-English meaning of the text, including any request, deadline, or tone. It works on read-only text (e.g. someone else's message), since capture is a direct AX read or a ⌘C.
+- The answer appears in `diff_bubble.show_text()`, the same window, countdown, and hover-to-hold as the diff, with `kind = "text"`. It shows the mode name, "your text wasn't changed", and the answer (up to 220 px, scrollable), with a **Copy** button instead of Undo. Answer lines of the form `Label: text` (e.g. Explain Meaning's `Meaning:` and `Roman Urdu:`) are rendered as labeled rows by `rows()` in the page. Other lines continue the current row. The prompt decides the rows. Any key press or a click outside dismisses it and passes through. The undo hotkey isn't intercepted.
+- `features.result_card` (`enabled`, `duration_seconds`: 15). When disabled, the answer is copied to the clipboard with an info pill.
+- Show modes join the picker and the radial menu like any other mode (Explain Meaning is radial slot 6 by config order).
 
 ## Direct replace, without the clipboard (`lib/ax_text.lua`)
 
@@ -113,12 +123,13 @@ The radial menu captures nothing itself. When the trigger is released it calls `
   use_glean, glean_binary_path, gemini_api_key, gemini_model, has_api_key,
   defaults = { timeout_seconds, debug, sound },
   debug, picker_hotkey,
-  modes = { { name, hotkey, system_prompt, timeout_seconds, diff_bubble } },
+  modes = { { name, hotkey, system_prompt, timeout_seconds, diff_bubble, output ("replace" | "show") } },
   features = {                     -- from features.normalize(), always fully populated
     idle_pill   = { enabled },
     diff_bubble = { enabled, duration_seconds, undo_hotkey, undo_method, context_words },
     radial_menu = { enabled, trigger (string | chord list), hold_ms, anchor, modes },
     direct_replace = { enabled, web_content ("paste" | "direct"), exclude_apps },
+    result_card    = { enabled, duration_seconds },
   },
 }
 ```

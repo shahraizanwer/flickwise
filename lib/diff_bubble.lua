@@ -10,6 +10,10 @@
 --   M.show(original, result, mode_name, win, ax_ctx)  -> true if a bubble was shown
 --       ax_ctx: set when the result was written through Accessibility; undo then
 --       restores it the same way (the app's own ⌘Z may not know about the write)
+--   M.configure_card(settings)                  features.result_card table
+--   M.show_text(text, mode_name)                -> true if shown. A read-only card for
+--       "show" modes (e.g. Explain Meaning): same timer, hover-to-hold, and a Copy
+--       button instead of Undo. Any key or outside click dismisses it.
 --   M.dismiss()
 --   M.destroy()
 
@@ -24,13 +28,14 @@ local HOVER_POLL_S = 0.1    -- mouse position is polled from Lua: a non-activati
                             -- webview doesn't reliably get mouseenter/mouseleave
 
 local _settings = nil
+local _card     = nil   -- features.result_card
 local _wv       = nil
 local _ready    = false
 local _pending  = nil
 local _tap      = nil
 local _timer    = nil
 local _poll     = nil
-local _session  = nil   -- { original, result, win, total, remaining, started (nil = not counting) }
+local _session  = nil   -- { kind = "diff" | "text", original, result, text, win, total, remaining, started (nil = not counting) }
 
 local MOD_GLYPHS = { cmd = "⌘", command = "⌘", shift = "⇧", ctrl = "⌃", control = "⌃",
                      alt = "⌥", opt = "⌥", option = "⌥" }
@@ -100,13 +105,24 @@ del { color: var(--err); background: var(--err-bg); text-decoration: line-throug
       border-radius: 4px; padding: 0 2px; }
 ins { color: var(--ok); background: var(--ok-bg); text-decoration: none; border-radius: 4px; padding: 0 2px; font-weight: 500; }
 .gap { color: var(--faint); }
+#diff.plain { max-height: 220px; color: var(--text); font-size: 14px; line-height: 1.5; user-select: text; }
+#head .spark { color: #0a84ff; font-size: 13px; }
+.row + .row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.row .lbl { display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
+            text-transform: uppercase; color: var(--muted); }
 #foot { display: flex; align-items: center; gap: 10px; padding: 10px 12px 12px 14px; font-size: 11.5px; color: var(--faint); }
 #undo {
   margin-left: auto; display: flex; align-items: center; gap: 7px;
   padding: 5px 9px 5px 10px; border-radius: 8px; color: var(--text); font-weight: 500;
   background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px var(--hairline);
 }
-#undo:hover { background: rgba(255,255,255,0.14); }
+#undo:hover, #copy:hover { background: rgba(255,255,255,0.14); }
+#copy {
+  margin-left: auto; padding: 5px 10px; border-radius: 8px; color: var(--text); font-weight: 500;
+  background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px var(--hairline);
+}
+#copy.done { color: var(--ok); }
+.hidden { display: none !important; }
 #undo kbd { font: inherit; font-size: 11px; color: var(--muted); }
 #track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.06); }
 #bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: #0a84ff;
@@ -120,7 +136,7 @@ ins { color: var(--ok); background: var(--ok-bg); text-decoration: none; border-
     <span id="x" title="Dismiss">✕</span></div>
   <div id="diff"></div>
   <div id="foot"><span id="hint">Original restored with undo</span>
-    <span id="undo">Undo <kbd id="keys"></kbd></span></div>
+    <span id="undo">Undo <kbd id="keys"></kbd></span><span id="copy" class="hidden">Copy</span></div>
   <div id="track"></div><div id="bar"></div>
 </div>
 <script>
@@ -133,16 +149,27 @@ function vis(s) {   // whitespace-only edits would be invisible; show a marker
 }
 function render(d) {
   card.classList.remove('in');
-  document.getElementById('summary').innerHTML = '<b>' + d.changes + '</b> ' + (d.changes === 1 ? 'change' : 'changes');
+  const text = d.kind === 'text', body = document.getElementById('diff');
   document.getElementById('mode').textContent = d.mode;
-  document.getElementById('keys').textContent = d.keys;
   document.getElementById('hint').textContent = d.hint;
-  document.getElementById('diff').innerHTML = d.segs.map(function(s) {
+  document.getElementById('undo').classList.toggle('hidden', text);
+  const copy = document.getElementById('copy');
+  copy.classList.toggle('hidden', !text); copy.classList.remove('done'); copy.textContent = 'Copy';
+  body.classList.toggle('plain', text);
+  body.scrollTop = 0;
+  if (text) {
+    document.getElementById('summary').innerHTML = '<span class="spark">✦</span> <b>' + esc(d.title) + '</b>';
+    body.innerHTML = rows(d.text);
+  } else {
+  document.getElementById('summary').innerHTML = '<b>' + d.changes + '</b> ' + (d.changes === 1 ? 'change' : 'changes');
+  document.getElementById('keys').textContent = d.keys;
+  body.innerHTML = d.segs.map(function(s) {
     if (s.op === 'del') return '<del>' + vis(s.text) + '</del>';
     if (s.op === 'ins') return '<ins>' + vis(s.text) + '</ins>';
     if (s.op === 'gap') return '<span class="gap"> … </span>';
     return esc(s.text);
   }).join('');
+  }
   hint = d.hint;
   countdown(d.duration, d.duration, false);
   // Report size synchronously: the window is still hidden here, and hidden
@@ -163,7 +190,24 @@ function countdown(remaining, total, running) {
 }
 function enter() { requestAnimationFrame(function() { card.classList.add('in'); }); }
 function leave() { card.classList.remove('in'); }
+// "Label: text" lines (e.g. "Meaning: …" / "Roman Urdu: …") become labeled rows;
+// anything else continues the current row as plain text.
+function rows(text) {
+  const out = [];
+  String(text || '').split('\n').forEach(function(line) {
+    const m = line.match(/^\s*\**([A-Za-z][A-Za-z ]{0,24}?)\**\s*:\s*(.*)$/);
+    if (m) out.push({ label: m[1].trim(), body: m[2] });
+    else if (out.length) out[out.length - 1].body += (line.trim() ? '\n' + line : '');
+    else if (line.trim()) out.push({ label: '', body: line });
+  });
+  return out.map(function(r) {
+    return '<div class="row">' + (r.label ? '<span class="lbl">' + esc(r.label) + '</span>' : '')
+      + esc(r.body.trim()) + '</div>';
+  }).join('');
+}
 document.getElementById('undo').addEventListener('mousedown', function() { post({ action: 'undo' }); });
+document.getElementById('copy').addEventListener('mousedown', function() { post({ action: 'copy' }); });
+function copied() { const c = document.getElementById('copy'); c.textContent = 'Copied ✓'; c.classList.add('done'); }
 document.getElementById('x').addEventListener('mousedown', function() { post({ action: 'close' }); });
 </script>
 </body></html>]]
@@ -371,6 +415,12 @@ local function on_event(e)
         return false
     end
 
+    -- Read-only card: nothing to undo, so any key just closes it (and goes through).
+    if _session.kind == "text" then
+        M.dismiss()
+        return false
+    end
+
     local mods, key = parse_hotkey(_settings.undo_hotkey)
     local flags = e:getFlags()
     local match = key and e:getKeyCode() == hs.keycodes.map[key]
@@ -432,6 +482,9 @@ local function build_webview()
             end
         elseif d.action == "undo" then
             undo(false)
+        elseif d.action == "copy" and _session.kind == "text" then
+            hs.pasteboard.setContents(_session.text)
+            _wv:evaluateJavaScript("copied()")
         elseif d.action == "close" then
             M.dismiss()
         end
@@ -460,7 +513,28 @@ end
 
 function M.configure(settings)
     _settings = settings
-    if not (settings and settings.enabled) then M.destroy() end
+    M.destroy()   -- rebuilt lazily on the next show
+end
+
+function M.configure_card(settings)
+    _card = settings
+end
+
+function M.show_text(text, mode_name)
+    if not (_card and _card.enabled) then return false end
+    M.dismiss()
+    if not _wv then build_webview() end
+    _session = { kind = "text", text = text, total = _card.duration_seconds, remaining = _card.duration_seconds }
+    js("render(" .. hs.json.encode({
+        kind     = "text",
+        title    = mode_name or "",
+        mode     = "your text wasn't changed",
+        text     = text,
+        hint     = "Hover to keep it open",
+        duration = _card.duration_seconds,
+    }) .. ")")
+    start_tap()
+    return true
 end
 
 function M.show(original, result, mode_name, win, ax_ctx)
@@ -471,11 +545,12 @@ function M.show(original, result, mode_name, win, ax_ctx)
     if stats.changes == 0 then return false end
 
     if not _wv then build_webview() end
-    _session = { original = original, result = result, win = win, ax = ax_ctx,
+    _session = { kind = "diff", original = original, result = result, win = win, ax = ax_ctx,
                  total = _settings.duration_seconds, remaining = _settings.duration_seconds }
 
     local keys = hotkey_caps(_settings.undo_hotkey)
     local data = {
+        kind     = "diff",
         segs     = trim_context(segs, _settings.context_words),
         changes  = stats.changes,
         mode     = mode_name or "",

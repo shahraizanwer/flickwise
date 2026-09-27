@@ -108,6 +108,16 @@ local function validate(cfg, notifier)
             end
         end
 
+        -- output: "replace" (default) swaps the selection; "show" leaves it alone and
+        -- shows the answer in a card (e.g. explaining what a message means)
+        local output = mode.output and trim(tostring(mode.output)):lower() or "replace"
+        if output ~= "replace" and output ~= "show" then
+            if notifier then
+                notifier.log("WARNING: " .. prefix .. " output must be 'replace' or 'show' — using 'replace'")
+            end
+            output = "replace"
+        end
+
         table.insert(valid_modes, {
             name            = trim(tostring(mode.name)),
             hotkey          = hotkey,
@@ -115,6 +125,7 @@ local function validate(cfg, notifier)
             timeout_seconds = mode.timeout_seconds or defaults.timeout_seconds,
             -- per-mode opt-out, e.g. `diff_bubble: false` for modes whose output isn't an edit
             diff_bubble     = (mode.diff_bubble ~= false),
+            output          = output,
         })
     end
 

@@ -67,6 +67,19 @@ local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
             notifier.debug("Transformed (" .. #transformed .. " chars): "
                 .. transformed:sub(1, 100))
 
+            if mode.output == "show" then
+                -- Explain-style mode: never touch the text, just show the answer.
+                if original_clipboard then hs.pasteboard.setContents(original_clipboard) end
+                hud.success("Done", string.format("%.1fs", hs.timer.secondsSinceEpoch() - started))
+                if not require("flickwise.lib.diff_bubble").show_text(transformed, mode.name) then
+                    hs.pasteboard.setContents(transformed)
+                    hud.info("Answer copied to clipboard", mode.name)
+                end
+                notifier.log("Mode '" .. mode.name .. "' shown (text not changed)")
+                _in_flight = false
+                return
+            end
+
             local unchanged = (transformed == selected_text)
             local direct = false
             if not unchanged then
