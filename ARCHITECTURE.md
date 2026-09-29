@@ -4,7 +4,7 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-09-27 (fix history + My Progress mistake tracker)._
+_Last updated: 2026-09-30 (Reply Helper: `output: "replies"`, reply card, insert at caret)._
 
 ---
 
@@ -24,10 +24,10 @@ _Last updated: 2026-09-27 (fix history + My Progress mistake tracker)._
 | `lib/features.lua` | **Single source of truth for optional features.** Holds defaults, normalizes `features:` from YAML, provides the menu list, and rewrites `features.<key>.enabled` in `config.yaml`. |
 | `lib/hotkey_manager.lua` | Binds a global hotkey for each mode, which calls `text_replacer.run`. |
 | `lib/text_replacer.lua` | Core flow: capture the selection → call the backend → replace the selection → sound, HUD and diff bubble. Tries direct (Accessibility) first, then falls back to ⌘C/⌘V. Guards against overlapping runs (`_in_flight`). |
-| `lib/ax_text.lua` | Accessibility text I/O (`features.direct_replace`): reads `AXSelectedText` and its range, detects web content, writes with `AXSelectedText` and verifies the write, and `restore()` for undo. |
+| `lib/ax_text.lua` | Accessibility text I/O (`features.direct_replace`): reads `AXSelectedText` and its range, detects web content, writes with `AXSelectedText` and verifies the write, `restore()` for undo, and `insert_at_focus()` to type at the caret (Reply Helper). |
 | `lib/ai_client.lua` / `lib/glean_client.lua` | `transform(text, mode, cfg, on_ok, on_err)`, async. `ai_client` trims the output and strips wrapping quotes. |
 | `lib/hud.lua` | Bottom-center status pill (working, done, error, info). An optional resting "idle" pill is controlled by `features.idle_pill`. |
-| `lib/diff_bubble.lua` | Card above the pill, in two kinds: the "what changed" word diff with undo (`features.diff_bubble`), and the read-only **answer card** for `output: "show"` modes (`features.result_card`). |
+| `lib/diff_bubble.lua` | Card above the pill, in three kinds: the "what changed" word diff with undo (`features.diff_bubble`), the read-only **answer card** for `output: "show"` modes (`features.result_card`), and the **reply card** for `output: "replies"` (`features.reply_helper`). |
 | `lib/history.lua` | Local fix history (`data/history.jsonl`) and the mistake tracker: record, prune, undo-marking, and `stats()` (`features.history`). |
 | `lib/history_window.lua` | **History & Progress…** window: searchable history with diffs and Copy/Delete, plus the My Progress tab. |
 | `lib/word_diff.lua` | Pure-Lua word-level diff: tokenize, trim the common prefix and suffix, run LCS, and group edits. No AI call. |
@@ -53,6 +53,8 @@ hotkey ─► text_replacer.run(mode, cfg)
                  ├─ hud.working(mode.name)
                  ├─ client.transform(...)  (async)
                  └─ on success:
+                      ├─ mode.output == "replies" → restore the clipboard, parse JSON (`%b{}`) →
+                      │    diff_bubble.show_replies() (malformed JSON → answer card with the raw text). Stop.
                       ├─ mode.output == "show" → restore the clipboard (⌘C path), hud.success,
                       │    diff_bubble.show_text(answer) (or answer → clipboard if the card is off). Stop:
                       │    the selection is never written.
@@ -86,12 +88,20 @@ The radial menu captures nothing itself. When the trigger is released it calls `
   - `direct` (automatic, not a setting): when the fix was written through Accessibility, undo uses `ax_text.restore()` instead of either method above.
   - The tap is always stopped **before** synthetic keys are sent, so it never sees them. Clicking "Undo" in the bubble refocuses the original window first.
 
+## Reply Helper (`output: "replies"`)
+
+- **Mode:** Reply Helper (⌃⌘R). Its prompt asks for JSON only: `{ meaning, replies: [{label, text}] }` with Short / Detailed / Polite no (or Warm), in the message's language, and the meaning always in simple English. `text_replacer` extracts the first balanced `{…}`, decodes it, and hands it to `diff_bubble.show_replies()`. History gets a `show` entry with `Meaning:` / `<label>:` lines.
+- **Reply card** (`kind = "replies"`, up to 3 options, body up to 330 px): unlike the other cards it does **not** close on outside clicks, so you can click into your reply box. While it's open, the 0.1 s poll remembers the last focused non-Hammerspoon window (`_session.win`) as the insertion target.
+- **Keys:** `1`–`n` with no modifiers insert a reply, but only while `armed`: any other key disarms it and passes through, so digits you type are never swallowed. `esc` closes (and passes through). Clicking an option inserts it, and **Copy** copies it.
+- **Insert:** `choose_reply()` closes the card, refocuses the target window if needed, and 120 ms later calls `text_replacer.insert_text()`. That uses `ax_text.insert_at_focus()` (sets `AXSelectedText` at the caret, verified, and skipped for web content unless `web_content: direct`), or otherwise pastes with clipboard restore.
+- `features.reply_helper`: `enabled` (off → the answer card shows the raw text), `duration_seconds` (45).
+
 ## Fix history & My Progress (`lib/history.lua`, `lib/history_window.lua`)
 
 - **Storage:** `data/history.jsonl` in the install folder, one JSON object per line, appended on every successful fix (`output: "replace"`, only when the text changed) and every show-mode answer (`output: "show"`). `data/` is git-ignored, so history stays on each Mac: a work laptop and a personal laptop each have their own. Nothing is uploaded.
 - **Entry:** `{ id, ts, mode, output, app, original, result, tracked?, mistakes?, undone? }`. The app comes from `ax_ctx.app` or the frontmost app when the fix started.
 - **Pruning:** on the first load after (re)configure, entries older than `retention_days` (and beyond 5000) are dropped and the file is rewritten.
-- **Mistakes:** only for modes in `mistake_modes` (default `["Fix Grammar"]`, so rewrites like Make Concise don't count). At record time the word diff's del/ins groups become `{ from, to, cat }`. `classify()` checks, in order: Capitalization, Apostrophes, Punctuation, Articles (a/an/the), Singular/plural, Verb form (aux verbs), Prepositions, Spelling (edit distance ≤ 2), Rewording (more than 6 words), and otherwise Word choice.
+- **Mistakes:** only for modes in `mistake_modes` (default `["Fix Grammar", "Minimal Fix"]`, so rewrites like Make Concise don't count). At record time the word diff's del/ins groups become `{ from, to, cat }`. `classify()` checks, in order: Capitalization, Apostrophes, Punctuation, Articles (a/an/the), Singular/plural, Verb form (aux verbs), Prepositions, Spelling (edit distance ≤ 2), Rewording (more than 6 words), and otherwise Word choice.
 - **Undo:** the diff bubble calls `history.mark_undone(history.last_id())`. Undone entries stay in History (with an "undone" badge) but are excluded from My Progress.
 - **`stats()`:** this week vs last week (fixes, mistakes), per-category counts (this week and total), the 12 most repeated `from → to` pairs (excluding Rewording), and an 8-week series.
 - **Window:** a normal titled window (menu bar → **History & Progress…**) that is focused on open, because a menu bar app's windows don't come forward on their own. Data is pushed as JSON with `load()`, and the page normalizes lists because empty Lua tables may arrive as `{}`. Entry diffs are computed on demand (`detail`). **Clear all history** needs a second click to confirm.
@@ -136,13 +146,15 @@ The radial menu captures nothing itself. When the trigger is released it calls `
   use_glean, glean_binary_path, gemini_api_key, gemini_model, has_api_key,
   defaults = { timeout_seconds, debug, sound },
   debug, picker_hotkey,
-  modes = { { name, hotkey, system_prompt, timeout_seconds, diff_bubble, output ("replace" | "show") } },
+  modes = { { name, hotkey, system_prompt, timeout_seconds, diff_bubble, output ("replace" | "show"),
+              temperature (0–2 or nil → ai_client default 0.2; Gemini only) } },
   features = {                     -- from features.normalize(), always fully populated
     idle_pill   = { enabled },
     diff_bubble = { enabled, duration_seconds, undo_hotkey, undo_method, context_words },
     radial_menu = { enabled, trigger (string | chord list), hold_ms, anchor, modes },
     direct_replace = { enabled, web_content ("paste" | "direct"), exclude_apps },
     result_card    = { enabled, duration_seconds },
+    reply_helper   = { enabled, duration_seconds },
     history        = { enabled, retention_days, exclude_apps, mistake_modes },
   },
 }

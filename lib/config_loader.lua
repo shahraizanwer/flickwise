@@ -109,13 +109,25 @@ local function validate(cfg, notifier)
         end
 
         -- output: "replace" (default) swaps the selection; "show" leaves it alone and
-        -- shows the answer in a card (e.g. explaining what a message means)
+        -- shows the answer in a card (e.g. explaining what a message means);
+        -- "replies" expects JSON { meaning, replies = [{label, text}] } and shows pickable replies
         local output = mode.output and trim(tostring(mode.output)):lower() or "replace"
-        if output ~= "replace" and output ~= "show" then
+        if output ~= "replace" and output ~= "show" and output ~= "replies" then
             if notifier then
-                notifier.log("WARNING: " .. prefix .. " output must be 'replace' or 'show' — using 'replace'")
+                notifier.log("WARNING: " .. prefix .. " output must be 'replace', 'show' or 'replies' — using 'replace'")
             end
             output = "replace"
+        end
+
+        -- temperature (optional, Gemini only): 0 = most literal/predictable, 2 = most creative
+        local temperature = nil
+        if mode.temperature ~= nil then
+            local t = tonumber(mode.temperature)
+            if t and t >= 0 and t <= 2 then
+                temperature = t
+            elseif notifier then
+                notifier.log("WARNING: " .. prefix .. " temperature must be a number from 0 to 2 — ignored")
+            end
         end
 
         table.insert(valid_modes, {
@@ -126,6 +138,7 @@ local function validate(cfg, notifier)
             -- per-mode opt-out, e.g. `diff_bubble: false` for modes whose output isn't an edit
             diff_bubble     = (mode.diff_bubble ~= false),
             output          = output,
+            temperature     = temperature,
         })
     end
 

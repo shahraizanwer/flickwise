@@ -33,14 +33,16 @@ end
 
 -- ── internal HTTP call ────────────────────────────────────────────────────────
 
-local function gemini_post(api_key, model, prompt_text, timeout_s, on_success, on_error)
+local DEFAULT_TEMPERATURE = 0.2
+
+local function gemini_post(api_key, model, prompt_text, timeout_s, on_success, on_error, temperature)
     local url  = API_BASE .. model .. ":generateContent"
     local body = hs.json.encode({
         contents = {
             { parts = { { text = prompt_text } } }
         },
         generationConfig = {
-            temperature     = 0.2,
+            temperature     = temperature or DEFAULT_TEMPERATURE,
             maxOutputTokens = 2048,
         },
     })
@@ -117,7 +119,7 @@ function M.transform(text, mode, cfg, on_success, on_error)
         .. "\n\n---\nTEXT TO TRANSFORM (verbatim, do not echo this header):\n"
         .. text
 
-    gemini_post(api_key, model, prompt, timeout_s, on_success, on_error)
+    gemini_post(api_key, model, prompt, timeout_s, on_success, on_error, mode.temperature)
 end
 
 function M.test_key(api_key, model, callback)

@@ -23,7 +23,11 @@ M.DEFAULTS = {
         enabled        = true,    -- keep a local history of fixes (data/history.jsonl, this Mac only)
         retention_days = 90,      -- older entries are deleted automatically
         exclude_apps   = {},      -- apps never recorded, e.g. { "1Password" }
-        mistake_modes  = { "Fix Grammar" },  -- modes whose corrections count as mistakes in My Progress
+        mistake_modes  = { "Fix Grammar", "Minimal Fix" },  -- modes whose corrections count as mistakes in My Progress
+    },
+    reply_helper = {
+        enabled          = true,  -- "replies" modes (Reply Helper) show pickable replies; off = plain answer card
+        duration_seconds = 45,    -- longer, so there's time to click into the reply box
     },
     result_card = {
         enabled          = true,  -- "show" modes (e.g. Explain Meaning) display their answer in a card;
@@ -56,6 +60,7 @@ M.MENU = {
     { key = "direct_replace", title = "Replace Without Clipboard" },
     { key = "result_card",    title = "Answer Card for Explain Modes" },
     { key = "history",        title = "Fix History & My Progress" },
+    { key = "reply_helper",   title = "Reply Helper Card" },
 }
 
 local UNDO_METHODS = { app = true, reselect = true }
@@ -106,6 +111,9 @@ function M.normalize(raw, notifier)
         out.result_card.duration_seconds = M.DEFAULTS.result_card.duration_seconds
     end
 
+    if out.reply_helper.duration_seconds <= 0 then
+        out.reply_helper.duration_seconds = M.DEFAULTS.reply_helper.duration_seconds
+    end
     if out.history.retention_days < 1 then out.history.retention_days = M.DEFAULTS.history.retention_days end
 
     local dr = out.direct_replace

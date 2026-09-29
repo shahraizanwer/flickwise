@@ -14,6 +14,10 @@
 --   M.show_text(text, mode_name)                -> true if shown. A read-only card for
 --       "show" modes (e.g. Explain Meaning): same timer, hover-to-hold, and a Copy
 --       button instead of Undo. Any key or outside click dismisses it.
+--   M.configure_replies(settings)               features.reply_helper table
+--   M.show_replies(data, mode_name, cfg)        -> true if shown. data = { meaning, replies = {{label, text}} }
+--       Reply card: stays open while you click into your reply box. 1–3 (before you
+--       type anything else) or clicking a reply inserts it at your cursor; Copy copies it.
 --   M.dismiss()
 --   M.destroy()
 
@@ -29,13 +33,16 @@ local HOVER_POLL_S = 0.1    -- mouse position is polled from Lua: a non-activati
 
 local _settings = nil
 local _card     = nil   -- features.result_card
+local _replies  = nil   -- features.reply_helper
+local HS_BUNDLE = "org.hammerspoon.Hammerspoon"
 local _wv       = nil
 local _ready    = false
 local _pending  = nil
 local _tap      = nil
 local _timer    = nil
 local _poll     = nil
-local _session  = nil   -- { kind = "diff" | "text", original, result, text, win, total, remaining, started (nil = not counting) }
+local _choose_timer = nil   -- keeps the delayed reply insert alive until it fires
+local _session  = nil   -- { kind = "diff" | "text" | "replies", original, result, text, replies, win, total, remaining, started (nil = not counting) }
 
 local MOD_GLYPHS = { cmd = "⌘", command = "⌘", shift = "⇧", ctrl = "⌃", control = "⌃",
                      alt = "⌥", opt = "⌥", option = "⌥" }
@@ -108,7 +115,7 @@ ins { color: var(--ok); background: var(--ok-bg); text-decoration: none; border-
 #diff.plain { max-height: 220px; color: var(--text); font-size: 14px; line-height: 1.5; user-select: text; }
 #head .spark { color: #0a84ff; font-size: 13px; }
 .row + .row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline); }
-.row .lbl { display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
+.row .lbl, .meaning .lbl { display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
             text-transform: uppercase; color: var(--muted); }
 #foot { display: flex; align-items: center; gap: 10px; padding: 10px 12px 12px 14px; font-size: 11.5px; color: var(--faint); }
 #undo {
@@ -123,6 +130,18 @@ ins { color: var(--ok); background: var(--ok-bg); text-decoration: none; border-
 }
 #copy.done { color: var(--ok); }
 .hidden { display: none !important; }
+#diff.replies { max-height: 330px; color: var(--text); }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; margin: 0 -10px; border-radius: 9px; cursor: default; }
+.opt:hover { background: rgba(10,132,255,0.16); }
+.opt .num { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; margin-top: 1px;
+  font-size: 11px; font-weight: 600; color: #fff; background: #0a84ff; }
+.opt .body { flex: 1; min-width: 0; }
+.opt .kind { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.opt .txt { font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
+.opt .cp { flex: none; font-size: 11px; color: var(--muted); padding: 3px 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--hairline); }
+.opt .cp:hover { color: var(--text); background: rgba(255,255,255,0.1); }
+.opt .cp.done { color: var(--ok); }
+.meaning { padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--hairline); color: rgba(245,245,247,0.85); }
 #undo kbd { font: inherit; font-size: 11px; color: var(--muted); }
 #track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.06); }
 #bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: #0a84ff;
@@ -149,7 +168,7 @@ function vis(s) {   // whitespace-only edits would be invisible; show a marker
 }
 function render(d) {
   card.classList.remove('in');
-  const text = d.kind === 'text', body = document.getElementById('diff');
+  const text = d.kind === 'text' || d.kind === 'replies', body = document.getElementById('diff');
   document.getElementById('mode').textContent = d.mode;
   document.getElementById('hint').textContent = d.hint;
   document.getElementById('undo').classList.toggle('hidden', text);
@@ -157,7 +176,17 @@ function render(d) {
   copy.classList.toggle('hidden', !text); copy.classList.remove('done'); copy.textContent = 'Copy';
   body.classList.toggle('plain', text);
   body.scrollTop = 0;
-  if (text) {
+  body.classList.toggle('replies', d.kind === 'replies');
+  if (d.kind === 'replies') {
+    document.getElementById('summary').innerHTML = '<span class="spark">✦</span> <b>' + esc(d.title) + '</b>';
+    copy.classList.add('hidden');
+    body.innerHTML = (d.meaning ? '<div class="meaning"><span class="lbl">Meaning</span>' + esc(d.meaning) + '</div>' : '')
+      + d.replies.map(function(r, i) {
+          return '<div class="opt" data-i="' + i + '"><span class="num">' + (i + 1) + '</span><div class="body">'
+            + '<div class="kind">' + esc(r.label || ('Reply ' + (i + 1))) + '</div><div class="txt">' + esc(r.text) + '</div></div>'
+            + '<span class="cp" data-cp="' + i + '">Copy</span></div>';
+        }).join('');
+  } else if (text) {
     document.getElementById('summary').innerHTML = '<span class="spark">✦</span> <b>' + esc(d.title) + '</b>';
     body.innerHTML = rows(d.text);
   } else {
@@ -207,6 +236,12 @@ function rows(text) {
 }
 document.getElementById('undo').addEventListener('mousedown', function() { post({ action: 'undo' }); });
 document.getElementById('copy').addEventListener('mousedown', function() { post({ action: 'copy' }); });
+document.getElementById('diff').addEventListener('mousedown', function(e) {
+  const cp = e.target.closest('.cp');
+  if (cp) { post({ action: 'copy_reply', index: +cp.dataset.cp }); cp.textContent = 'Copied ✓'; cp.classList.add('done'); return; }
+  const opt = e.target.closest('.opt');
+  if (opt) post({ action: 'choose_reply', index: +opt.dataset.i });
+});
 function copied() { const c = document.getElementById('copy'); c.textContent = 'Copied ✓'; c.classList.add('done'); }
 document.getElementById('x').addEventListener('mousedown', function() { post({ action: 'close' }); });
 </script>
@@ -329,6 +364,11 @@ local function start_poll()
     stop_poll()
     _poll = hs.timer.doEvery(HOVER_POLL_S, function()
         if not _session then stop_poll(); return end
+        if _session.kind == "replies" then
+            local w = hs.window.focusedWindow()
+            local app = w and w:application()
+            if app and app:bundleID() ~= HS_BUNDLE then _session.win = w end
+        end
         local over = mouse_over_card()
         if over and _session.started then pause_countdown()
         elseif not over and not _session.started then resume_countdown() end
@@ -412,6 +452,24 @@ local function on_event(e)
     if not _session then return false end
     local t = e:getType()
 
+    -- Reply card: stays up while you click into your reply box. 1–3 pick a reply
+    -- only until you type something else, so digits you type are never swallowed.
+    if _session.kind == "replies" then
+        if t == hs.eventtap.event.types.leftMouseDown then return false end
+        local code, flags = e:getKeyCode(), e:getFlags()
+        if code == hs.keycodes.map.escape then M.dismiss(); return false end
+        if _session.armed and not (flags.cmd or flags.ctrl or flags.alt or flags.shift) then
+            for i = 1, #_session.replies do
+                if code == hs.keycodes.map[tostring(i)] then
+                    M.choose_reply(i)
+                    return true
+                end
+            end
+        end
+        _session.armed = false
+        return false
+    end
+
     if t == hs.eventtap.event.types.leftMouseDown then
         local p = hs.mouse.absolutePosition()
         local f = _wv and _wv:frame()
@@ -488,6 +546,11 @@ local function build_webview()
             end
         elseif d.action == "undo" then
             undo(false)
+        elseif d.action == "choose_reply" and _session.kind == "replies" then
+            M.choose_reply((tonumber(d.index) or 0) + 1)
+        elseif d.action == "copy_reply" and _session.kind == "replies" then
+            local r = _session.replies[(tonumber(d.index) or 0) + 1]
+            if r then hs.pasteboard.setContents(r.text) end
         elseif d.action == "copy" and _session.kind == "text" then
             hs.pasteboard.setContents(_session.text)
             _wv:evaluateJavaScript("copied()")
@@ -524,6 +587,55 @@ end
 
 function M.configure_card(settings)
     _card = settings
+end
+
+function M.configure_replies(settings)
+    _replies = settings
+end
+
+function M.show_replies(data, mode_name, cfg)
+    if not (_replies and _replies.enabled) then return false end
+    if type(data) ~= "table" or type(data.replies) ~= "table" or #data.replies == 0 then return false end
+    M.dismiss()
+    if not _wv then build_webview() end
+    local replies = {}
+    for i = 1, math.min(#data.replies, 3) do
+        local r = data.replies[i]
+        if type(r) == "table" and type(r.text) == "string" and r.text ~= "" then
+            table.insert(replies, { label = tostring(r.label or ""), text = r.text })
+        end
+    end
+    if #replies == 0 then return false end
+    _session = { kind = "replies", replies = replies, cfg = cfg, armed = true,
+                 win = hs.window.focusedWindow(),
+                 total = _replies.duration_seconds, remaining = _replies.duration_seconds }
+    js("render(" .. hs.json.encode({
+        kind     = "replies",
+        title    = mode_name or "Reply",
+        mode     = "your text wasn't changed",
+        meaning  = type(data.meaning) == "string" and data.meaning or "",
+        replies  = replies,
+        hint     = "Press 1–" .. #replies .. " now, or click in your reply box and then click a reply",
+        duration = _replies.duration_seconds,
+    }) .. ")")
+    start_tap()
+    return true
+end
+
+-- Insert reply `i` at the cursor of the window you were last in.
+function M.choose_reply(i)
+    local s = _session
+    local r = s and s.replies and s.replies[i]
+    if not r then return end
+    local win, cfg = s.win, s.cfg
+    M.dismiss()
+    if win and not same_window(win) then pcall(function() win:focus() end) end
+    _choose_timer = hs.timer.doAfter(0.12, function()
+        _choose_timer = nil
+        require("flickwise.lib.text_replacer").insert_text(r.text, cfg)
+        require("flickwise.lib.hud").info("Reply inserted", r.label ~= "" and r.label or nil)
+        require("flickwise.lib.notifier").log("Reply helper: inserted reply " .. i)
+    end)
 end
 
 function M.show_text(text, mode_name)

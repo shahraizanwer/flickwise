@@ -5,6 +5,7 @@
 --   text_replacer.run(mode, cfg)
 --   text_replacer.run_with_text(selected_text, original_clipboard, mode, cfg, ax_ctx)
 --   text_replacer.capture_direct(cfg)   -> ax_ctx or nil  (used by the picker)
+--   text_replacer.insert_text(text, cfg)  type text at the focused field's caret (direct or paste)
 --   text_replacer.is_in_flight()
 
 local M = {}
@@ -49,6 +50,20 @@ local function paste(text, original_clipboard)
     if saved then hs.pasteboard.setContents(saved) end
 end
 
+-- Put `text` at the caret of whatever field is focused now: directly through
+-- Accessibility when allowed (clipboard untouched), otherwise by pasting.
+function M.insert_text(text, cfg)
+    local settings = direct_settings(cfg)
+    local ok, why = false, "direct replace is off"
+    if settings then ok, why = require("flickwise.lib.ax_text").insert_at_focus(text, settings) end
+    if ok then
+        require("flickwise.lib.notifier").log("Inserted via Accessibility")
+    else
+        require("flickwise.lib.notifier").debug("Insert by paste: " .. tostring(why))
+        paste(text, nil)
+    end
+end
+
 local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
     local notifier = require("flickwise.lib.notifier")
     local hud      = require("flickwise.lib.hud")
@@ -70,6 +85,39 @@ local function dispatch(selected_text, original_clipboard, mode, cfg, ax_ctx)
         function(transformed)
             notifier.debug("Transformed (" .. #transformed .. " chars): "
                 .. transformed:sub(1, 100))
+
+            if mode.output == "replies" then
+                -- Reply helper: never touch the text; show the meaning + pickable replies.
+                if original_clipboard then hs.pasteboard.setContents(original_clipboard) end
+                hud.success("Done", string.format("%.1fs", hs.timer.secondsSinceEpoch() - started))
+                local data
+                local json = transformed:match("%b{}")
+                if json then
+                    local ok, parsed = pcall(hs.json.decode, json)
+                    if ok and type(parsed) == "table" then data = parsed end
+                end
+                local bubble = require("flickwise.lib.diff_bubble")
+                local shown = data and bubble.show_replies(data, mode.name, cfg)
+                local summary = transformed
+                if data and type(data.replies) == "table" then
+                    local lines = { "Meaning: " .. tostring(data.meaning or "") }
+                    for i, r in ipairs(data.replies) do
+                        if type(r) == "table" then
+                            table.insert(lines, (r.label and r.label ~= "" and r.label or ("Reply " .. i)) .. ": " .. tostring(r.text or ""))
+                        end
+                    end
+                    summary = table.concat(lines, "\n")
+                end
+                if not shown and not bubble.show_text(summary, mode.name) then
+                    hs.pasteboard.setContents(summary)
+                    hud.info("Replies copied to clipboard", mode.name)
+                end
+                if not data then notifier.log("Reply helper: response wasn't valid JSON — shown as text") end
+                history.record({ mode = mode.name, output = "show", app = app_name,
+                                 original = selected_text, result = summary })
+                _in_flight = false
+                return
+            end
 
             if mode.output == "show" then
                 -- Explain-style mode: never touch the text, just show the answer.

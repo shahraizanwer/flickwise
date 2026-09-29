@@ -45,7 +45,10 @@ features:
     enabled: true             # keep a history of your fixes (menu bar → History & Progress…); stored only on this Mac
     retention_days: 90        # older entries are deleted automatically
     exclude_apps: []          # apps never recorded, e.g. ["1Password"]
-    mistake_modes: ["Fix Grammar"]  # modes whose corrections count as mistakes in My Progress
+    mistake_modes: ["Fix Grammar", "Minimal Fix"]  # modes whose corrections count as mistakes in My Progress
+  reply_helper:
+    enabled: true             # Reply Helper shows the meaning + 3 replies you can insert (off = plain answer card)
+    duration_seconds: 45      # longer, so there's time to click into your reply box
 
 modes:
   - name: "Fix Grammar"
@@ -63,13 +66,6 @@ modes:
     system_prompt: |
       Cut the text by ~40% while preserving all meaning. Return only the
       shortened text. No preamble. Do not ask follow-up questions. Do not add any closing remarks.
-
-  - name: "Explain Code"
-    hotkey: ["cmd", "shift", "e"]
-    diff_bubble: false        # output is an explanation, not an edit
-    system_prompt: |
-      Explain this code in 2 short sentences for a teammate. Return only
-      the explanation, no code. Do not ask follow-up questions. Do not add any closing remarks.
 
   - name: "Clarify Message"
     hotkey: ["cmd", "shift", "m"]
@@ -104,3 +100,46 @@ modes:
          by sentence. Don't explain or summarize it. If the text is already Urdu or Roman
          Urdu, write it in clean Roman Urdu.
       3. No preamble, no quotes, no markdown, no follow-up questions.
+
+  - name: "Minimal Fix"
+    hotkey: ["ctrl", "cmd", "g"]
+    temperature: 0            # most literal: don't get creative with your wording
+    system_prompt: |
+      You are a strict, minimal grammar corrector for an English learner. Return the
+      CLOSEST correct version of the text: fix only real mistakes, with the fewest
+      possible changes, so the learner can see exactly what was wrong.
+      Rules:
+      1. Keep every word, the word order, and the sentence structure unless it is
+         grammatically wrong. Do not rephrase, reorder, shorten, or "improve" anything.
+      2. Fix only: spelling, grammar (tense, agreement, articles, plurals, prepositions),
+         wrong word forms, capitalization, and punctuation that is clearly wrong.
+      3. Do not replace a correct word with a better or more formal one. Do not change
+         the tone, style, or meaning. Informal but correct words stay as they are
+         (e.g. "till", "ok", "kinda", "gonna", "stuff", "guys").
+      4. If a sentence can be fixed by changing one or two words, change only those words.
+      5. Keep the original line breaks, emoji, names, and formatting.
+      6. If the text is already correct, return it unchanged.
+      7. Return ONLY the corrected text. No preamble, no explanation, no quotes.
+
+  - name: "Reply Helper"
+    hotkey: ["ctrl", "cmd", "r"]
+    output: "replies"         # show the meaning + 3 replies; press 1–3 or click one to insert it
+    system_prompt: |
+      You help a non-native English speaker reply to a message they received at work
+      or from friends/family. Read the message and answer with ONLY this JSON (no
+      markdown, no code fences, nothing before or after it):
+      {"meaning": "...", "replies": [{"label": "Short", "text": "..."}, {"label": "Detailed", "text": "..."}, {"label": "Polite no / not now", "text": "..."}]}
+      Rules:
+      1. "meaning": what the message says and what the sender wants, in 1-2 short,
+         simple English sentences (mention any request, deadline, or tone).
+      2. Write exactly 3 replies the user could send as-is, in the first person:
+         "Short" = 1 sentence; "Detailed" = 2-4 sentences that answer properly;
+         "Polite no / not now" = a kind way to decline, delay, or ask for more time.
+         If declining makes no sense (e.g. a thank-you), use label "Warm" instead.
+      3. Use simple, natural, correct English with a friendly, professional tone.
+         No overly formal words, no "kindly", no "do the needful".
+      4. Reply in the same language as the message: English for English; Roman Urdu
+         for Urdu or Roman Urdu messages. "meaning" is always in simple English.
+      5. Reuse facts from the message (times, names, what was asked). Don't invent new
+         facts or promises; use a placeholder like [time] only for things the user must
+         decide and the message doesn't say.

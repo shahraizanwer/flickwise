@@ -8,6 +8,7 @@
 --   M.can_write(ctx, settings)   -> bool, reason
 --   M.replace(ctx, new_text)     -> ok, reason   (on success ctx.new_text/new_range are set)
 --   M.restore(ctx)               -> ok, reason   (undo a replace(): puts ctx.text back and reselects it)
+--   M.insert_at_focus(text, settings) -> ok, reason   (type `text` at the focused field's caret)
 
 local M = {}
 
@@ -141,6 +142,25 @@ function M.replace(ctx, new_text)
     ctx.new_text  = new_text
     ctx.new_range = { location = ctx.range.location, length = u16len(new_text) }
     return true, why
+end
+
+-- Insert at the caret of the focused field (replacing its selection, if any).
+-- Returns false when that isn't possible directly (not editable, web content, or
+-- the app ignored it), so the caller can paste instead.
+function M.insert_at_focus(text, settings)
+    local app = hs.application.frontmostApplication()
+    if excluded(app and app:name(), settings and settings.exclude_apps) then return false, "excluded app" end
+    local el = attr(hs.axuielement.systemWideElement(), "AXFocusedUIElement")
+    if not el then return false, "no focused element" end
+    if attr(el, "AXSubrole") == "AXSecureTextField" then return false, "secure field" end
+    local settable = false
+    pcall(function() settable = el:isAttributeSettable("AXSelectedText") == true end)
+    if not settable then return false, "focused element isn't editable through Accessibility" end
+    if in_web_content(el) and (settings and settings.web_content) ~= "direct" then
+        return false, "web content (uses paste)"
+    end
+    local selected = attr(el, "AXSelectedText") or ""
+    return write_verified(el, selected, text)
 end
 
 function M.restore(ctx)

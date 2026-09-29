@@ -72,10 +72,11 @@ On another Mac, paste this into Claude Code:
 | Mode | Hotkey | What it does |
 |---|---|---|
 | Fix Grammar | `⌘⇧G` | Fixes grammar, spelling, and awkward phrasing; keeps tone and formatting |
+| Minimal Fix | `⌃⌘G` | The **closest correct version**: fixes only real mistakes and never rephrases, so the diff shows exactly what you got wrong |
 | Make Concise | `⌘⇧C` | Cuts the text by ~40% while keeping all meaning |
-| Explain Code | `⌘⇧E` | Explains selected code in 2 sentences for a teammate |
 | Clarify Message | `⌘⇧M` | Rewrites the message so it's clear and unambiguous |
 | Urdu to English | `⌘⇧U` | Translates Urdu into natural English |
+| Reply Helper | `⌃⌘R` | For a message you received: its meaning + 3 ready replies. Press 1–3 to insert one |
 | Explain Meaning | `⌃⌘M` | Shows what the text means in simple words, plus an exact Roman Urdu translation. **Doesn't change the text** |
 | *(all modes)* | `⌘⇧P` | Command palette: pick any mode |
 
@@ -135,6 +136,18 @@ Menu bar → **History & Progress…** opens a window with:
 
 History is saved **only on this Mac** (`~/.hammerspoon/flickwise/data/`), so it's never uploaded or pushed to GitHub, and each of your Macs keeps its own. It's kept for 90 days by default. Only the modes listed in `mistake_modes` (Fix Grammar by default) count toward My Progress, and fixes you undo don't count. Use **Clear all history** in the window to wipe it.
 
+### Reply Helper (answer a message)
+Select a message someone sent you and press **⌃⌘R**. A card shows **what it means** plus **3 ready replies**: *Short*, *Detailed*, and *Polite no / not now*. They're in simple, natural English (or Roman Urdu if the message was in Urdu).
+
+| Do this | Result |
+|---|---|
+| Press `1`, `2`, or `3` right away | Inserts that reply where your text cursor is |
+| Click in your reply box, then click a reply | Inserts it there (the card stays open while you click) |
+| **Copy** next to a reply | Copies it |
+| `esc` / ✕ | Closes the card |
+
+Once you start typing, the number keys work normally again. The card stays up for 45 seconds (hover to keep it open). Settings: `features.reply_helper`.
+
 ### Replace without the clipboard
 Flickwise reads the selected text and writes the result **directly into the text field** through macOS Accessibility. There's no ⌘C/⌘V, so your clipboard keeps whatever you copied, and it's faster. Where an app doesn't support that, it falls back to copy/paste automatically (and restores your clipboard).
 
@@ -163,7 +176,10 @@ features:
     enabled: true             # local fix history + My Progress (this Mac only)
     retention_days: 90
     exclude_apps: []          # never record these apps, e.g. ["1Password"]
-    mistake_modes: ["Fix Grammar"]
+    mistake_modes: ["Fix Grammar", "Minimal Fix"]
+  reply_helper:
+    enabled: true             # Reply Helper card (off = plain answer card)
+    duration_seconds: 45
   result_card:
     enabled: true             # answer card for "show" modes (off = copy the answer to the clipboard)
     duration_seconds: 15
@@ -205,7 +221,12 @@ modes:
 
 Save the file. Flickwise detects the change and reloads within ~1 second — no Hammerspoon restart needed. You can also add and edit modes from **menu bar → Edit Modes…**.
 
-**Optional per-mode timeout override:**
+**Optional per-mode settings:**
+- `temperature: 0` (Gemini only, 0–2) makes a mode more literal. Minimal Fix uses 0, and the default is 0.2.
+- `output: "show"` shows the answer in a card instead of replacing the text. `output: "replies"` expects JSON `{ "meaning": …, "replies": [{ "label": …, "text": … }] }` and shows pickable replies (see Reply Helper).
+- `diff_bubble: false` turns off the "what changed" bubble for that mode.
+
+**Per-mode timeout override:**
 ```yaml
   - name: "Long Summary"
     hotkey: ["cmd", "shift", "l"]
