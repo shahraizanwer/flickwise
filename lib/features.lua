@@ -46,6 +46,19 @@ M.DEFAULTS = {
         anchor  = "mouse",        -- mouse | caret (falls back to mouse when the app doesn't expose the caret)
         modes   = {},             -- mode names clockwise from the top; empty = all modes in config order (max 8)
     },
+    dictation = {
+        enabled       = false,    -- hold the trigger, speak, release: the text is typed at the caret
+        trigger       = "right_control", -- right_control | right_command | right_shift | right_option | fn
+        hold_ms       = 200,      -- hold this long before recording starts (a quick tap does nothing)
+        provider      = "gemini", -- gemini (needs the API key) | whisper (local whisper.cpp, offline)
+        style         = "clean",  -- verbatim | clean (fix fillers/grammar) | english (translate + polish)
+        max_seconds   = 120,      -- recording stops by itself after this long
+        microphone    = "default", -- avfoundation audio device: "default" or an index like "0" (ffmpeg -f avfoundation -list_devices true -i "")
+        language      = "auto",   -- whisper only: "auto", "en", "ur", ...
+        whisper_model = "",       -- whisper only: path to a ggml model, e.g. ~/.hammerspoon/flickwise/data/models/ggml-small.bin
+        whisper_bin   = "",       -- whisper only: path to whisper-cli; empty = auto-detect
+        ffmpeg_path   = "",       -- empty = auto-detect (Homebrew)
+    },
 }
 
 -- Settings that may legitimately be more than one type.
@@ -61,9 +74,13 @@ M.MENU = {
     { key = "result_card",    title = "Answer Card for Explain Modes" },
     { key = "history",        title = "Fix History & My Progress" },
     { key = "reply_helper",   title = "Reply Helper Card" },
+    { key = "dictation",      title = "Voice Dictation (Hold to Talk)" },
 }
 
 local UNDO_METHODS = { app = true, reselect = true }
+local DICTATION_TRIGGERS = { right_control = true, right_command = true, right_shift = true, right_option = true, fn = true }
+local DICTATION_PROVIDERS = { gemini = true, whisper = true }
+local DICTATION_STYLES = { verbatim = true, clean = true, english = true }
 
 local function warn(notifier, msg)
     if notifier then notifier.log("WARNING: features: " .. msg) end
@@ -132,6 +149,27 @@ function M.normalize(raw, notifier)
     end
     if rm.anchor ~= "mouse" and rm.anchor ~= "caret" then rm.anchor = "mouse" end
     if rm.hold_ms < 0 then rm.hold_ms = M.DEFAULTS.radial_menu.hold_ms end
+
+    local dc = out.dictation
+    if not DICTATION_TRIGGERS[dc.trigger] then
+        warn(notifier, "dictation.trigger '" .. tostring(dc.trigger) .. "' is unknown — using right_control")
+        dc.trigger = "right_control"
+    end
+    if not DICTATION_PROVIDERS[dc.provider] then
+        warn(notifier, "dictation.provider must be 'gemini' or 'whisper' — using 'gemini'")
+        dc.provider = "gemini"
+    end
+    if not DICTATION_STYLES[dc.style] then
+        warn(notifier, "dictation.style must be 'verbatim', 'clean' or 'english' — using 'clean'")
+        dc.style = "clean"
+    end
+    if dc.hold_ms < 0 then dc.hold_ms = M.DEFAULTS.dictation.hold_ms end
+    if dc.max_seconds < 5 or dc.max_seconds > 600 then dc.max_seconds = M.DEFAULTS.dictation.max_seconds end
+    if dc.microphone == "" then dc.microphone = "default" end
+    if dc.enabled and rm.enabled and rm.trigger == dc.trigger then
+        warn(notifier, "dictation.trigger '" .. dc.trigger .. "' is also the radial menu trigger — dictation disabled")
+        dc.enabled = false
+    end
     return out
 end
 

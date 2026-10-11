@@ -1,6 +1,7 @@
 -- ai_client.lua — Google Gemini Flash HTTP client (replaces glean_client.lua)
 -- Public API:
 --   M.transform(text, mode, cfg, on_success, on_error)   async
+--   M.transcribe(audio_b64, mime, prompt, cfg, on_success, on_error)   async (dictation)
 --   M.test_key(api_key, callback(success, err_string))   async
 
 local M = {}
@@ -35,15 +36,17 @@ end
 
 local DEFAULT_TEMPERATURE = 0.2
 
-local function gemini_post(api_key, model, prompt_text, timeout_s, on_success, on_error, temperature)
-    local url  = API_BASE .. model .. ":generateContent"
-    local body = hs.json.encode({
+-- `prompt` is a string, or a list of Gemini parts (text / inline_data) for audio.
+local function gemini_post(api_key, model, prompt, timeout_s, on_success, on_error, temperature, max_tokens)
+    local url   = API_BASE .. model .. ":generateContent"
+    local parts = type(prompt) == "table" and prompt or { { text = prompt } }
+    local body  = hs.json.encode({
         contents = {
-            { parts = { { text = prompt_text } } }
+            { parts = parts }
         },
         generationConfig = {
             temperature     = temperature or DEFAULT_TEMPERATURE,
-            maxOutputTokens = 2048,
+            maxOutputTokens = max_tokens or 2048,
         },
     })
 
@@ -120,6 +123,19 @@ function M.transform(text, mode, cfg, on_success, on_error)
         .. text
 
     gemini_post(api_key, model, prompt, timeout_s, on_success, on_error, mode.temperature)
+end
+
+-- Transcribe (and optionally rewrite) base64 audio. `prompt` says what to return.
+function M.transcribe(audio_b64, mime, prompt, cfg, on_success, on_error)
+    local api_key = cfg.gemini_api_key
+    local model   = cfg.gemini_model or DEFAULT_MODEL
+    if not api_key or api_key == "" then
+        on_error("no_api_key")
+        return
+    end
+    gemini_post(api_key, model,
+        { { text = prompt }, { inline_data = { mime_type = mime, data = audio_b64 } } },
+        60, on_success, on_error, 0.0, 4096)
 end
 
 function M.test_key(api_key, model, callback)

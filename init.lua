@@ -27,10 +27,11 @@ local function main()
     local radial_menu   = safe_require("flickwise.lib.radial_menu")
     local history       = safe_require("flickwise.lib.history")
     local history_window= safe_require("flickwise.lib.history_window")
+    local dictation     = safe_require("flickwise.lib.dictation")
 
     if not (notifier and config_loader and hotkey_manager and menubar_ui
             and watcher and ai_client and prompt_editor and mode_picker
-            and setup_wizard and hud and diff_bubble and radial_menu and history and history_window) then
+            and setup_wizard and hud and diff_bubble and radial_menu and history and history_window and dictation) then
         hs.alert.show("Flickwise failed to load — check Hammerspoon console", 5)
         return
     end
@@ -54,6 +55,7 @@ local function main()
         notifier.log("Config applied — " .. #config.modes .. " modes active")
         mode_picker.setup(config)
         radial_menu.configure(config.features.radial_menu, config)
+        dictation.configure(config.features.dictation, config)
     end
 
     callbacks.reload = function()
@@ -93,6 +95,7 @@ local function main()
         hotkey_manager.unbind_all()
         mode_picker.teardown()
         radial_menu.teardown()
+        dictation.teardown()
         history_window.close()
         watcher.stop()
         menubar_ui.destroy()
@@ -102,6 +105,17 @@ local function main()
         hud.destroy()
         notifier.log("Flickwise stopped")
     end
+
+    -- Bring an existing config.yaml up to date with new/retired default modes
+    -- (config.yaml itself is never overwritten on update).
+    local sync_ok, sync = pcall(require("flickwise.lib.config_sync").run,
+        CONFIG_PATH, (CONFIG_PATH:gsub("config%.yaml$", "config.example.yaml")))
+    if not sync_ok then
+        notifier.log("Config sync failed: " .. tostring(sync))
+        sync = { added = {}, removed = {} }
+    end
+    if #sync.added > 0 then notifier.log("Config sync: added modes " .. table.concat(sync.added, ", ")) end
+    if #sync.removed > 0 then notifier.log("Config sync: removed retired modes " .. table.concat(sync.removed, ", ")) end
 
     -- Initial load
     local config, err = config_loader.load(CONFIG_PATH, notifier)
@@ -125,6 +139,13 @@ local function main()
                 end)
             end)
         end
+    end
+
+    if #sync.added + #sync.removed > 0 then
+        local parts = {}
+        if #sync.added > 0 then table.insert(parts, "added " .. table.concat(sync.added, ", ")) end
+        if #sync.removed > 0 then table.insert(parts, "removed " .. table.concat(sync.removed, ", ")) end
+        hud.info("Modes updated", table.concat(parts, " · "))   -- queued until the pill is ready
     end
 
     watcher.start(CONFIG_PATH, callbacks.reload)

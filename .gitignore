@@ -8,3 +8,6 @@ data/
 
 # Installer backups
 *.backup.*
+
+# /brag video output
+brag-output/

@@ -34,6 +34,18 @@ features:
     hold_ms: 150              # modifier triggers: hold this long before the ring opens (a quick tap does nothing)
     anchor: "mouse"           # mouse | caret (caret falls back to mouse when the app doesn't expose it)
     modes: []                 # mode names clockwise from the top, e.g. ["Fix Grammar", "Urdu to English"]; empty = all (max 8)
+  dictation:
+    enabled: false         # hold the trigger, speak, release: the text is typed at the caret of any app
+    trigger: "right_control"  # right_control | right_command | right_shift | right_option | fn (must differ from the radial menu trigger)
+    hold_ms: 200              # hold this long before recording starts (a quick tap does nothing)
+    provider: "gemini"        # gemini (uses your API key) | whisper (local whisper.cpp, offline; needs whisper_model)
+    style: "clean"            # verbatim | clean (fix fillers + grammar) | english (translate Urdu/Hindi/mixed speech and polish)
+    max_seconds: 120          # recording stops by itself after this long
+    microphone: "default"     # "default" or a device index; list them: ffmpeg -f avfoundation -list_devices true -i ""
+    language: "auto"          # whisper only: "auto", "en", "ur", ...
+    whisper_model: ""         # whisper only: path to a ggml model, e.g. ~/.hammerspoon/flickwise/data/models/ggml-small.bin
+    whisper_bin: ""           # whisper only: path to whisper-cli (empty = auto-detect)
+    ffmpeg_path: ""           # empty = auto-detect (Homebrew)
   direct_replace:
     enabled: true             # read & replace the selection via Accessibility; your clipboard is never touched
     web_content: "paste"      # web pages/Electron apps (Chrome, Slack…): "paste" (safe) or "direct"
