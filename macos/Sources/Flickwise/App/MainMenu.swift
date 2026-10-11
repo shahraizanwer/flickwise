@@ -27,7 +27,7 @@ enum MainMenu {
         add(edit, to: main)
 
         let window = NSMenu(title: "Window")
-        window.addItem(item("Voice History", #selector(AppDelegate.showHistory), "1", target))
+        window.addItem(item("Flickwise", #selector(AppDelegate.showHistory), "1", target))
         window.addItem(.separator())
         window.addItem(item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m", nil))
         window.addItem(item("Close", #selector(NSWindow.performClose(_:)), "w", nil))

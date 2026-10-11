@@ -9,7 +9,60 @@ struct AppSettings: Codable, Equatable {
     var transcription = Transcription()
     var history = History()
     var ai = AI()
+    var fixes = Fixes()
+    var diffCard = DiffCard()
+    var resultCard = Card(enabled: true, durationSeconds: 15)
+    var replyCard = Card(enabled: true, durationSeconds: 45)
+    var picker = Picker()
+    var radialMenu = RadialMenu()
     var debug = false
+
+    /// How text fixes read and write the selection.
+    struct Fixes: Codable, Equatable {
+        var directReplace = true      // read/replace through Accessibility (clipboard untouched); else ⌘C/⌘V
+        var webContent: WebContent = .paste   // browsers/Electron: paste (safe) or direct
+        var excludeApps: [String] = []        // apps that always use copy/paste
+        var sound = "Tink"            // macOS sound after a fix; "" = none
+    }
+
+    enum WebContent: String, Codable, CaseIterable, Identifiable {
+        case paste, direct
+        var id: String { rawValue }
+    }
+
+    /// The "what changed" card after a replace, with Undo.
+    struct DiffCard: Codable, Equatable {
+        var enabled = true
+        var durationSeconds = 6       // auto-dismiss (paused while the pointer is over it)
+        var undoHotkey = KeyCombo(keyCode: 6, command: true)   // ⌘Z, only while the card is visible
+        var undoMethod: UndoMethod = .app
+        var contextWords = 8          // unchanged words kept around each change
+    }
+
+    enum UndoMethod: String, Codable, CaseIterable, Identifiable {
+        case app, reselect
+        var id: String { rawValue }
+        var title: String { self == .app ? "The app's own undo (⌘Z)" : "Reselect and paste the original" }
+    }
+
+    /// Answer card (output "show") and reply card (output "replies").
+    struct Card: Codable, Equatable {
+        var enabled: Bool
+        var durationSeconds: Int
+    }
+
+    struct Picker: Codable, Equatable {
+        var enabled = true
+        var hotkey = KeyCombo(keyCode: 35, command: true, shift: true)   // ⌘⇧P
+    }
+
+    struct RadialMenu: Codable, Equatable {
+        var enabled = true
+        var trigger: TriggerKey = .rightOption
+        var holdMs = 150
+        var modes: [String] = []      // mode ids clockwise from the top; empty = the first 8 modes
+        var modeNames: [String] = []  // (import only) names from the Hammerspoon config, matched to ids later
+    }
 
     struct Transcription: Codable, Equatable {
         var engine: TranscriptionEngine = .local
@@ -41,11 +94,21 @@ struct AppSettings: Codable, Equatable {
         var enabled = true            // keep everything you dictate (searchable in Voice History)
         var retentionDays = 0         // 0 = keep forever
         var keepAudio = false         // keep every recording; failed ones are always kept so you can retry
+        var excludeApps: [String] = []          // apps whose fixes are never recorded
+        var mistakeModes = ["Fix Grammar", "Minimal Fix"]   // modes whose corrections count in My Progress
     }
 
     struct AI: Codable, Equatable {
+        var backend: Backend = .gemini     // for text fixes (dictation is on-device unless transcription.engine = gemini)
         var model = "gemini-flash-lite-latest"
         var timeoutSeconds = 60
+        var gleanPath = ""                 // Glean CLI, e.g. /opt/homebrew/bin/glean ("" = auto-detect)
+    }
+
+    enum Backend: String, Codable, CaseIterable, Identifiable {
+        case gemini, glean
+        var id: String { rawValue }
+        var title: String { self == .gemini ? "Google Gemini" : "Glean CLI" }
     }
 }
 
@@ -95,6 +158,12 @@ extension AppSettings {
         transcription = c.value(.transcription, d.transcription)
         history = c.value(.history, d.history)
         ai = c.value(.ai, d.ai)
+        fixes = c.value(.fixes, d.fixes)
+        diffCard = c.value(.diffCard, d.diffCard)
+        resultCard = c.value(.resultCard, d.resultCard)
+        replyCard = c.value(.replyCard, d.replyCard)
+        picker = c.value(.picker, d.picker)
+        radialMenu = c.value(.radialMenu, d.radialMenu)
         debug = c.value(.debug, d.debug)
     }
 }
@@ -135,6 +204,8 @@ extension AppSettings.History {
         enabled = c.value(.enabled, d.enabled)
         retentionDays = max(0, c.value(.retentionDays, d.retentionDays))
         keepAudio = c.value(.keepAudio, d.keepAudio)
+        excludeApps = c.value(.excludeApps, d.excludeApps)
+        mistakeModes = c.value(.mistakeModes, d.mistakeModes)
     }
 }
 
@@ -142,7 +213,61 @@ extension AppSettings.AI {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Self()
+        backend = c.value(.backend, d.backend)
         model = c.value(.model, d.model)
         timeoutSeconds = min(300, max(5, c.value(.timeoutSeconds, d.timeoutSeconds)))
+        gleanPath = c.value(.gleanPath, d.gleanPath)
+    }
+}
+
+extension AppSettings.Fixes {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        directReplace = c.value(.directReplace, d.directReplace)
+        webContent = c.value(.webContent, d.webContent)
+        excludeApps = c.value(.excludeApps, d.excludeApps)
+        sound = c.value(.sound, d.sound)
+    }
+}
+
+extension AppSettings.DiffCard {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        enabled = c.value(.enabled, d.enabled)
+        durationSeconds = min(120, max(2, c.value(.durationSeconds, d.durationSeconds)))
+        undoHotkey = c.value(.undoHotkey, d.undoHotkey)
+        undoMethod = c.value(.undoMethod, d.undoMethod)
+        contextWords = min(50, max(1, c.value(.contextWords, d.contextWords)))
+    }
+}
+
+extension AppSettings.Card {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = c.value(.enabled, true)
+        durationSeconds = min(600, max(3, c.value(.durationSeconds, 15)))
+    }
+}
+
+extension AppSettings.Picker {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        enabled = c.value(.enabled, d.enabled)
+        hotkey = c.value(.hotkey, d.hotkey)
+    }
+}
+
+extension AppSettings.RadialMenu {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        enabled = c.value(.enabled, d.enabled)
+        trigger = c.value(.trigger, d.trigger)
+        holdMs = max(0, c.value(.holdMs, d.holdMs))
+        modes = c.value(.modes, d.modes)
+        modeNames = c.value(.modeNames, d.modeNames)
     }
 }

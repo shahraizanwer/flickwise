@@ -15,6 +15,8 @@ enum SelfTest {
         case "--render" where args.count > 3: return render(args[2], to: args[3])
         case "--load-test" where args.count > 2: return loadTest(args[2])
         case "--gate" where args.count > 2: return gate(Array(args.dropFirst(2)))
+        case "--diff" where args.count > 2: return diffJSON(args[2])
+        case "--import-preview": return importPreview()
         default:
             print("""
             usage: Flickwise --selftest
@@ -22,7 +24,7 @@ enum SelfTest {
                    Flickwise --benchmark [--models a,b] [--gemini] <file.wav>…
                    Flickwise --model-info [id]                  (prints: file url sha256 bytes path)
                    Flickwise --coreml-info [id]                 (same, for the Neural Engine encoder zip)
-                   Flickwise --render settings|setup|history out.png   (draws a window offscreen)
+                   Flickwise --render main|history|progress|modes|dictation|features|ai|general|setup out.png
                    Flickwise --load-test <file.wav>             (on-demand cost: load → transcribe → unload, ×3)
             """)
             return 2
@@ -34,14 +36,26 @@ enum SelfTest {
     private static func render(_ which: String, to path: String) -> Int32 {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
+        // With a sandbox data folder, FLICKWISE_RENDER_IMPORT=1 fills it with the Hammerspoon fix history.
+        if ProcessInfo.processInfo.environment["FLICKWISE_RENDER_IMPORT"] == "1",
+           ProcessInfo.processInfo.environment["FLICKWISE_SUPPORT_DIR"] != nil,
+           HistoryStore.shared.recent(limit: 1).isEmpty {
+            LegacyImport.importFixHistory()
+        }
         let (view, size): (AnyView, NSSize) = {
             switch which {
             case "setup": return (AnyView(SetupView()), NSSize(width: 560, height: 680))
-            case "history": return (AnyView(HistoryView()), NSSize(width: 720, height: 640))
-            default: return (AnyView(SettingsView()), NSSize(width: 520, height: 1500))
+            case "history": return (AnyView(HistoryView()), NSSize(width: 760, height: 640))
+            case "progress": return (AnyView(MyProgressView()), NSSize(width: 760, height: 760))
+            case "modes": return (AnyView(ModesView()), NSSize(width: 900, height: 900))
+            case "dictation": return (AnyView(DictationPane()), NSSize(width: 620, height: 1100))
+            case "features": return (AnyView(FeaturesPane()), NSSize(width: 620, height: 1500))
+            case "ai": return (AnyView(AIPane()), NSSize(width: 620, height: 520))
+            case "general": return (AnyView(GeneralPane()), NSSize(width: 620, height: 760))
+            default: return (AnyView(MainWindowView()), NSSize(width: 980, height: 680))
             }
         }()
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .dark))
         let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .darkAqua)
@@ -56,6 +70,36 @@ enum SelfTest {
               (try? png.write(to: URL(fileURLWithPath: path))) != nil else { return 1 }
         window.close()
         print("wrote \(path)")
+        return 0
+    }
+
+    // ── --diff: word diff + mistake categories as JSON (compared against the Lua version) ──
+
+    private static func diffJSON(_ path: String) -> Int32 {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let cases = try? JSONDecoder().decode([[String]].self, from: data) else { return 1 }
+        let out: [[String: Any]] = cases.map { c in
+            let (segs, changes) = WordDiff.diff(c[0], c[1])
+            return ["segs": segs.map { ["op": $0.op.rawValue, "text": $0.text] }, "changes": changes,
+                    "cats": Mistakes.extract(original: c[0], result: c[1]).map(\.cat)]
+        }
+        let json = try! JSONSerialization.data(withJSONObject: out, options: [.sortedKeys])
+        print(String(data: json, encoding: .utf8)!)
+        return 0
+    }
+
+    // ── --import-preview: what would be imported from the Hammerspoon config (read-only) ──
+
+    private static func importPreview() -> Int32 {
+        var s = AppSettings()
+        LegacyImport.applyPreview(to: &s)
+        print("backend: \(s.ai.backend.rawValue)  glean: \(s.ai.gleanPath.isEmpty ? "-" : s.ai.gleanPath)  model: \(s.ai.model)")
+        print("picker: \(s.picker.hotkey.display)  sound: \(s.fixes.sound)  diff card: \(s.diffCard.enabled) \(s.diffCard.durationSeconds)s undo \(s.diffCard.undoHotkey.display) \(s.diffCard.undoMethod.rawValue)")
+        print("radial: \(s.radialMenu.enabled) \(s.radialMenu.trigger.rawValue) \(s.radialMenu.holdMs)ms  direct replace: \(s.fixes.directReplace) web \(s.fixes.webContent.rawValue)")
+        print("answer card: \(s.resultCard.enabled) \(s.resultCard.durationSeconds)s  reply card: \(s.replyCard.enabled) \(s.replyCard.durationSeconds)s  mistake modes: \(s.history.mistakeModes)")
+        for m in LegacyImport.modes() ?? [] {
+            print("mode: \(m.name) [\(m.hotkey?.display ?? "-")] \(m.output.rawValue) temp=\(m.temperature.map { String($0) } ?? "-") diff=\(m.showDiff) prompt=\(m.prompt.count) chars")
+        }
         return 0
     }
 
@@ -203,6 +247,67 @@ enum SelfTest {
         check(Speech.trimmedToSpeech(quiet) == nil, "speech gate: hiss and a click are not speech")
         check(Speech.floats(fromWAV: WAV.encode(pcm16Mono: Data([0x00, 0x40, 0x00, 0xC0]), sampleRate: 16_000)) == [0.5, -0.5],
               "WAV → floats")
+        // Modes, shortcuts, YAML import, replies, progress
+        check(KeyCombo(names: ["cmd", "shift", "g"])?.display == "⇧⌘G", "shortcut from names")
+        check(KeyCombo(names: ["ctrl", "cmd", "m"])?.names == ["ctrl", "cmd", "m"], "shortcut names round-trip")
+        check(KeyCombo(names: ["cmd", "nope"]) == nil, "unknown key is rejected")
+        let modeJSON = try? JSONEncoder().encode(DefaultModes.all)
+        let back = modeJSON.flatMap { try? JSONDecoder().decode([Mode].self, from: $0) }
+        check(back == DefaultModes.all && DefaultModes.all.count == 7, "modes save and load (7 defaults)")
+        check(DefaultModes.all.first { $0.name == "Reply Helper" }?.output == .replies
+              && DefaultModes.all.first { $0.name == "Minimal Fix" }?.temperature == 0, "default modes keep output and temperature")
+        let yaml = """
+        glean_binary_path: "/opt/homebrew/bin/glean"   # comment
+        picker_hotkey: ["cmd", "shift", "p"]
+        features:
+          diff_bubble:
+            enabled: false            # off
+            undo_hotkey: ["cmd", "z"]
+          history:
+            mistake_modes: ["Fix Grammar", "Minimal Fix"]
+        modes:
+          - name: "Fix Grammar"
+            hotkey: ["cmd", "shift", "g"]
+            system_prompt: |
+              Line one: keep "quotes" # not a comment
+              Line two.
+
+          - name: 'Explain'
+            output: "show"
+            temperature: 0
+            diff_bubble: false
+            system_prompt: |
+              Explain.
+        """
+        let y = MiniYAML.parse(yaml)
+        let f = y["features"] as? [String: Any]
+        check((y["glean_binary_path"] as? String) == "/opt/homebrew/bin/glean", "yaml: quoted scalar with a comment")
+        check((y["picker_hotkey"] as? [String]) == ["cmd", "shift", "p"], "yaml: flow list")
+        check(((f?["diff_bubble"] as? [String: Any])?["enabled"] as? String) == "false", "yaml: nested map")
+        let ym = y["modes"] as? [[String: Any]]
+        check(ym?.count == 2 && (ym?[1]["name"] as? String) == "Explain", "yaml: list of modes")
+        check((ym?[0]["system_prompt"] as? String) == "Line one: keep \"quotes\" # not a comment\nLine two.\n", "yaml: block scalar kept verbatim")
+        check((ym?[1]["output"] as? String) == "show" && (ym?[1]["diff_bubble"] as? String) == "false", "yaml: mode options")
+        let reply = ReplyData.parse("Sure! ```json\n{\"meaning\": \"They ask {x}\", \"replies\": [{\"label\": \"Short\", \"text\": \"Yes.\"}, {\"text\": \"Sure, see you then.\"}]}\n```")
+        check(reply?.meaning == "They ask {x}" && reply?.replies.count == 2 && reply?.replies[1].label == "Reply 2",
+              "reply JSON found inside extra text")
+        check(ReplyData.parse("not json") == nil, "reply JSON: plain text is rejected")
+        var fixes: [DictationRecord] = []
+        for (daysAgo, ms) in [(1, 2), (2, 1), (9, 3)] {
+            var r = DictationRecord(createdAt: Date().addingTimeInterval(-Double(daysAgo) * 86_400), duration: 0, appName: nil,
+                                    appBundleID: nil, style: .verbatim, rawText: "", text: "", status: .inserted)
+            r.kind = .fix
+            r.mistakes = (0..<ms).map { _ in Mistakes.Mistake(from: "has", to: "have", cat: "Verb form (is/are, has/have…)") }
+            fixes.append(r)
+        }
+        let ps = ProgressStats.compute(fixes)
+        check(ps.thisWeek.fixes == 2 && ps.thisWeek.mistakes == 3 && ps.lastWeek.mistakes == 3, "progress: weekly buckets")
+        check(ps.top.first?.count == 6 && ps.categories.first?.week == 3, "progress: repeats and categories")
+        check(Mistakes.classify("in", "on") == "Prepositions (in/on/at…)" && Mistakes.classify("teh", "the") == "Spelling",
+              "mistake categories")
+        check(CardView.rows("Meaning: hello\nmore\nRoman Urdu: salam").map(\.label) == ["Meaning", "Roman Urdu"],
+              "answer card rows")
+
         check(WhisperModel.find("large-v3-turbo-q8_0")?.coreMLName == "ggml-large-v3-turbo-encoder.mlmodelc"
               && WhisperModel.find("small")?.coreMLName == "ggml-small-encoder.mlmodelc", "Core ML encoder names")
         check(WhisperModel.find(WhisperModel.defaultID) != nil && WhisperModel.catalog.allSatisfy { $0.sha256.count == 64 },

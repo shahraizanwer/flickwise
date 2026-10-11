@@ -163,7 +163,11 @@ if ! grep -q "hs.ipc.cliInstall" "$INIT"; then
     tmp="$(mktemp)"; { echo 'hs.ipc.cliInstall()'; cat "$INIT"; } > "$tmp"; mv "$tmp" "$INIT"
     ok "Enabled the hs command-line tool"
 fi
-if grep -Eq "require[ (]*[\"']flickwise[\"']" "$INIT"; then
+NATIVE_APP="$APPS_DIR/Flickwise.app"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$NATIVE_APP/Contents/Info.plist" 2>/dev/null)" = "app.flickwise.mac" ] \
+   && ! grep -Eq "^[[:space:]]*require[ (]*[\"']flickwise[\"']" "$INIT"; then
+    ok "Flickwise runs as the native app (macos/install.sh), so Hammerspoon doesn't load it"
+elif grep -Eq "^[[:space:]]*require[ (]*[\"']flickwise[\"']" "$INIT"; then
     ok "init.lua already loads Flickwise"
 else
     printf '\nrequire("flickwise")\n' >> "$INIT"

@@ -46,7 +46,7 @@ enum TextInserter {
         return nil
     }
 
-    private static func isWebContent(_ el: AXUIElement) -> Bool {
+    static func isWebContent(_ el: AXUIElement) -> Bool {
         if (attribute(el, "AXDOMIdentifier") as AnyObject?) != nil || (attribute(el, "AXDOMClassList") as AnyObject?) != nil {
             return true
         }
@@ -59,10 +59,10 @@ enum TextInserter {
         return false
     }
 
-    private static func writeVerified(_ el: AXUIElement, _ text: String) -> Bool {
+    static func writeVerified(_ el: AXUIElement, _ text: String, replacing old: String? = nil) -> Bool {
         let before: String? = attribute(el, kAXValueAttribute)
         let countBefore: Int? = attribute(el, kAXNumberOfCharactersAttribute)
-        let selected: String = attribute(el, kAXSelectedTextAttribute) ?? ""
+        let selected: String = old ?? attribute(el, kAXSelectedTextAttribute) ?? ""
         guard AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success else {
             return false
         }
@@ -75,7 +75,7 @@ enum TextInserter {
         return true
     }
 
-    private static func attribute<T>(_ el: AXUIElement, _ name: String) -> T? {
+    static func attribute<T>(_ el: AXUIElement, _ name: String) -> T? {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(el, name as CFString, &value) == .success else { return nil }
         if T.self == AXUIElement.self {
@@ -87,9 +87,10 @@ enum TextInserter {
 
     // ── paste ───────────────────────────────────────────────────────────────
 
-    private static func paste(_ text: String) {
+    /// Pastes `text`, then restores the clipboard to `restoring` (default: what it held before).
+    static func paste(_ text: String, restoring: [NSPasteboardItem]? = nil) {
         let pb = NSPasteboard.general
-        let saved = snapshot(pb)
+        let saved = restoring ?? snapshot(pb)
         pb.clearContents()
         let item = NSPasteboardItem()
         item.setString(text, forType: .string)
@@ -106,7 +107,7 @@ enum TextInserter {
         }
     }
 
-    private static func snapshot(_ pb: NSPasteboard) -> [NSPasteboardItem] {
+    static func snapshot(_ pb: NSPasteboard) -> [NSPasteboardItem] {
         (pb.pasteboardItems ?? []).map { old in
             let copy = NSPasteboardItem()
             for type in old.types {
@@ -116,14 +117,22 @@ enum TextInserter {
         }
     }
 
-    private static func sendCommandV() {
+    static func sendCommandV() { sendKey(9, flags: .maskCommand) }   // kVK_ANSI_V
+
+    /// Posts one key press (down + up) with exactly these modifier flags.
+    static func sendKey(_ key: CGKeyCode, flags: CGEventFlags = []) {
         let src = CGEventSource(stateID: .combinedSessionState)
-        let vKey: CGKeyCode = 9   // kVK_ANSI_V
-        let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
-        let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
-        down?.flags = .maskCommand
-        up?.flags = .maskCommand
+        let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
+        let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
+        down?.flags = flags
+        up?.flags = flags
         down?.post(tap: .cgAnnotatedSessionEventTap)
         up?.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    static func restoreClipboard(_ items: [NSPasteboardItem]) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if !items.isEmpty { pb.writeObjects(items) }
     }
 }

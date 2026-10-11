@@ -5,6 +5,19 @@ import Combine
 import SwiftUI
 
 final class HistoryViewModel: ObservableObject {
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "All", dictation = "Dictation", fixes = "Fixes & answers"
+        var id: String { rawValue }
+        var kinds: [DictationRecord.Kind]? {
+            switch self {
+            case .all: return nil
+            case .dictation: return [.dictation]
+            case .fixes: return [.fix, .answer]
+            }
+        }
+    }
+
+    @Published var filter: Filter = .all
     @Published var query = ""
     @Published private(set) var sections: [(day: Date, records: [DictationRecord])] = []
     @Published private(set) var stats = HistoryStats()
@@ -20,12 +33,16 @@ final class HistoryViewModel: ObservableObject {
             .sink { [weak self] _ in self?.reload() }.store(in: &bag)
         store.$revision.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.reload() }.store(in: &bag)
+        $filter.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.reload() }
+        }.store(in: &bag)
         reload()
     }
 
     func reload() {
         let q = query.trimmingCharacters(in: .whitespaces)
-        let records = q.isEmpty ? store.recent(limit: 1000) : store.search(q, limit: 1000)
+        let records = q.isEmpty ? store.recent(limit: 1000, kinds: filter.kinds)
+                                : store.search(q, limit: 1000, kinds: filter.kinds)
         let cal = Calendar.current
         var grouped: [(Date, [DictationRecord])] = []
         for r in records {
@@ -40,10 +57,9 @@ final class HistoryViewModel: ObservableObject {
     func delete(_ r: DictationRecord) { store.delete(id: r.id) }
 
     func retry(_ r: DictationRecord) {
-        guard let controller = AppDelegate.shared?.dictation else { return }
         retrying.insert(r.id)
         Task { @MainActor in
-            _ = await controller.retry(r)
+            if let controller = AppDelegate.shared?.dictation { _ = await controller.retry(r) }
             retrying.remove(r.id)
         }
     }
@@ -108,6 +124,10 @@ struct HistoryView: View {
                     Button { model.query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundColor(.secondary)
                 }
+                Picker("", selection: $model.filter) {
+                    ForEach(HistoryViewModel.Filter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Menu {
                     Button("Export as Markdown…") { model.export() }
                 } label: { Image(systemName: "ellipsis.circle") }
@@ -166,12 +186,14 @@ struct HistoryView: View {
     private var empty: some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: model.query.isEmpty ? "waveform" : "magnifyingglass")
+            Image(systemName: model.query.isEmpty ? (model.filter == .fixes ? "text.badge.checkmark" : "waveform") : "magnifyingglass")
                 .font(.system(size: 36, weight: .light)).foregroundColor(.secondary)
             Text(model.query.isEmpty ? "Nothing here yet" : "No matches")
                 .font(.title3.weight(.semibold))
             Text(model.query.isEmpty
-                 ? "Hold \(settings.settings.dictation.trigger.short), speak, and let go. Everything you say is kept here, on this Mac."
+                 ? (model.filter == .fixes
+                    ? "Select text anywhere and press a mode's shortcut (or ⌘⇧P). Fixes and answers are kept here."
+                    : "Hold \(settings.settings.dictation.trigger.short), speak, and let go. Everything you say is kept here, on this Mac.")
                  : "Try fewer or different words.")
                 .foregroundColor(.secondary).multilineTextAlignment(.center).frame(maxWidth: 340)
             Spacer()
@@ -219,33 +241,12 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(record.createdAt, style: .time).font(.system(size: 12, weight: .medium)).monospacedDigit()
-                if let app = record.appName {
-                    Text(app).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
-                }
-            }
-            .frame(width: 76, alignment: .leading)
-
+            timeColumn
             VStack(alignment: .leading, spacing: 6) {
-                if record.status == .failed {
-                    Label(record.error ?? "Failed", systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12)).foregroundColor(.orange)
-                    Text("Recording saved (\(Int(record.duration.rounded())) s). Retry when you're back online.")
-                        .font(.system(size: 13)).foregroundColor(.secondary)
-                } else {
-                    Text(record.text).font(.system(size: 13.5)).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if showOriginal && !record.rawText.isEmpty && record.rawText != record.text {
-                    Text(record.rawText).font(.system(size: 12)).foregroundColor(.secondary).textSelection(.enabled)
-                        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
-                }
+                mainText
+                if showOriginal && !record.rawText.isEmpty && record.rawText != record.text { originalBlock }
                 HStack(spacing: 8) {
-                    Tag(text: record.style.title)
-                    if let engine = Self.engineLabel(record.engine) { Tag(text: engine) }
-                    Tag(text: "\(record.wordCount) words · \(Int(record.duration.rounded())) s")
+                    tags
                     Spacer()
                     actions.opacity(hover || retrying ? 1 : 0)
                 }
@@ -254,6 +255,53 @@ private struct HistoryRow: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(hover ? 0.06 : 0.03)))
         .onHover { hover = $0 }
+    }
+
+    private var timeColumn: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(record.createdAt, style: .time).font(.system(size: 12, weight: .medium)).monospacedDigit()
+            if let app = record.appName {
+                Text(app).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+            }
+        }
+        .frame(width: 76, alignment: .leading)
+    }
+
+    @ViewBuilder private var mainText: some View {
+        if record.status == .failed {
+            Label(record.error ?? "Failed", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12)).foregroundColor(.orange)
+            Text("Recording saved (\(Int(record.duration.rounded())) s). Retry when you're back online.")
+                .font(.system(size: 13)).foregroundColor(.secondary)
+        } else {
+            Text(record.text).font(.system(size: 13.5)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var originalBlock: some View {
+        Group {
+            if record.kind == .fix {
+                DiffText.make(WordDiff.diff(record.rawText, record.text).segments, plain: .secondary)
+            } else {
+                Text(record.rawText).foregroundColor(.secondary)
+            }
+        }
+        .font(.system(size: 12)).textSelection(.enabled)
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+    }
+
+    @ViewBuilder private var tags: some View {
+        if record.kind == .dictation {
+            Tag(text: record.style.title)
+            if let engine = Self.engineLabel(record.engine) { Tag(text: engine) }
+            Tag(text: "\(record.wordCount) words · \(Int(record.duration.rounded())) s")
+        } else {
+            Tag(text: record.mode ?? (record.kind == .fix ? "Fix" : "Answer"))
+            if let n = record.mistakes?.count, n > 0 { Tag(text: n == 1 ? "1 mistake" : "\(n) mistakes") }
+            if record.undone { Tag(text: "undone") }
+        }
     }
 
     /// "whisper:large-v3-turbo-q5_0" → "On-device · Large v3 Turbo (compressed)"; "gemini:…" → "Gemini".
@@ -275,7 +323,8 @@ private struct HistoryRow: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
             }.controlSize(.small)
             if !record.rawText.isEmpty && record.rawText != record.text {
-                Button(showOriginal ? "Hide original" : "Original") { showOriginal.toggle() }.controlSize(.small)
+                Button(showOriginal ? "Hide" : (record.kind == .fix ? "What changed" : "Original")) { showOriginal.toggle() }
+                    .controlSize(.small)
             }
         }
         Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }

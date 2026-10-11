@@ -1,13 +1,15 @@
 # Flickwise for macOS (native app)
 
-A small, fast menu bar app: **hold a key, speak, let go**, and your words are typed
+Flickwise in one native menu bar app: **select text and press a shortcut** to fix, shorten,
+translate, explain or answer it with AI, or **hold a key, speak, let go** and your words are typed
 wherever you're working. Speech is recognized **on your Mac** with Whisper large-v3-turbo
 (the model Voicebox uses), so there's no network round trip, no rate limit, and no API key.
 Everything you say is also kept in a searchable **Voice History** on your Mac.
 
-It replaces the Hammerspoon version's dictation. The text-fix modes (Fix Grammar,
-the radial menu, Reply Helper…) still run in Hammerspoon for now and will move
-here feature by feature (see `IDEAS.md`, section 5).
+Everything is configurable in the app window: your **modes** (prompts, shortcuts, order, what they
+do), the cards, the ⌘⇧P picker, the radial menu, the AI backend (Gemini or the **Glean CLI**),
+dictation, and history. It replaces the Hammerspoon version: the installer imports its modes,
+settings and fix history, then switches it off.
 
 ## Install
 
@@ -52,7 +54,12 @@ To update, run the installer again. Settings, the key, and history are kept.
 
 | Do this | What happens |
 |---|---|
+| Select text, press a mode's shortcut (e.g. **⇧⌘G** Fix Grammar) | The text is replaced; a card under the notch shows what changed, with **Undo ⌘Z** |
+| **⌃⌘M** Explain Meaning · **⌃⌘R** Reply Helper | A card with the meaning (and Roman Urdu) · three replies: press **1–3** to insert one |
+| **⇧⌘P** | The mode picker: type to filter, a number or Return to run |
+| Hold **Right ⌥**, flick toward a mode, release | The radial menu runs that mode |
 | Hold **Right ⌘** (configurable), speak, release | An island grows out of the notch (Flicky the mascot listens, with a live waveform), then the text is typed at your cursor |
+| Menu bar → **Open Flickwise…** (or open it from Spotlight) | History, My Progress, **Modes** (edit prompts, shortcuts, order; *Try it*), Dictation, Features, AI, General |
 | **Esc** while holding | Cancel; nothing is typed |
 | Quick tap, or Right ⌘ + another key | Nothing (it's a normal shortcut) |
 | Menu bar waveform → **Voice History…** | Search everything you've said, with Copy, Original transcript, Retry, and Delete |

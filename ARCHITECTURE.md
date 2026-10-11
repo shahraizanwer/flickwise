@@ -4,13 +4,13 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-10-11 (Native app: on-device Whisper via whisper.cpp is the default recognizer; Gemini optional)._
+_Last updated: 2026-10-12 (One app: text fixes, modes, cards, picker, radial menu and fix history moved into the native app; Hammerspoon is retired by its installer)._
 
 ---
 
 ## Runtime
 
-- **Two apps, one repo, during the move to native:** the text-fix features run inside **Hammerspoon** (described in most of this file), and **dictation now runs in the native app** in `macos/` (see "Native app" below). The native installer turns off `features.dictation` in the Hammerspoon config so only one of them listens.
+- **The native app (`macos/`) is Flickwise.** Since 2026-10-12 it does everything: dictation, every mode (text fixes, answers, replies), the cards, the picker, the radial menu, history and My Progress, all configurable in its window. `macos/install.sh` imports the Hammerspoon setup and comments out `require("flickwise")` in `~/.hammerspoon/init.lua`. The Lua sections below describe the Hammerspoon version, which still works on Macs that haven't installed the app (and is the reference the Swift port follows).
 - The Hammerspoon part runs entirely inside **Hammerspoon** (Lua 5.4). There is no build step. Hammerspoon loads `~/.hammerspoon/init.lua`, which runs `require("flickwise")`, and that loads `flickwise/init.lua`.
 - UI surfaces (the pill, the picker, the diff bubble and the radial menu) are borderless, **non-activating** `hs.webview` windows, so the app you are typing in keeps focus. The HTML, CSS and JS for each one live inline in its Lua module.
 - Keyboard input for the popups comes from short-lived `hs.eventtap`s, never from giving focus to a webview.
@@ -169,10 +169,10 @@ A Swift menu bar app (AppKit + SwiftUI, macOS 13.3+, about 1 MB plus the 8.5 MB 
 
 | File | Role |
 |---|---|
-| `App/main.swift` | Entry point. `--selftest`, `--transcribe <wav>`, `--benchmark …`, `--model-info`, `--coreml-info`, `--render <view> <png>` run headless (`App/SelfTest.swift`, `App/Benchmark.swift`) and free the Whisper model before exiting; otherwise starts NSApplication as an accessory (menu bar) app. |
+| `App/main.swift` | Entry point. `--selftest`, `--transcribe <wav>`, `--benchmark …`, `--load-test`, `--gate`, `--diff <cases.json>`, `--import-preview`, `--model-info`, `--coreml-info`, `--render <page> <png>` run headless (`App/SelfTest.swift`, `App/Benchmark.swift`) and free the Whisper model before exiting; otherwise starts NSApplication (main-actor) as an accessory (menu bar) app. |
 | `App/AppDelegate.swift` | Wires settings → `DictationController`, builds the status item menu (rebuilt on open: status line, words today, Voice History, Style submenu, Pause, Settings, Set Up), opens Setup when a permission or the recognizer is missing, **otherwise opens Voice History when launched by hand** (not when launched as a login item: `keyAELaunchedAsLogInItem`), handles **reopen** (opening the app again while it runs shows Voice History), polls for Accessibility, prunes history. `menuBarIconHidden` is true when macOS has put the status item behind the camera notch (its window lies outside the screen's `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`), which happens when the menu bar is full; Voice History then shows a tip. Single-instance. `FLICKWISE_OPEN=history|settings|hud` opens a window (or plays a HUD demo) at launch for testing. |
 | `App/MainMenu.swift` | The app menu shown while a window is open (About, Settings… ⌘,, Set Up, Hide, Quit; Edit with Cut/Copy/Paste/Select All, which text fields need for ⌘V; Window). |
-| `App/WindowManager.swift` | Opens History / Settings / Setup as normal windows hosting SwiftUI, with `collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]` so they appear on the current Space even over a full-screen app (otherwise they open on a desktop Space and seem not to open). While any is open the app is `.regular` (Dock and ⌘-Tab); when the last closes it goes back to `.accessory`. |
+| `App/WindowManager.swift` | Opens the main window (`"main"`, `MainWindowView`) and Setup as normal windows hosting SwiftUI, with `collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]` so they appear on the current Space even over a full-screen app (otherwise they open on a desktop Space and seem not to open). While any is open the app is `.regular` (Dock and ⌘-Tab); when the last closes it goes back to `.accessory`. |
 | `App/Permissions.swift` | Accessibility (`AXIsProcessTrustedWithOptions`), Microphone (`AVCaptureDevice`), System Settings deep links, and the login item (`SMAppService.mainApp`). |
 | `Input/HotkeyMonitor.swift` | A persistent `CGEventTap` on `flagsChanged` reports press/release of the trigger. It tells left from right by the device-dependent flag bit and never swallows modifiers. A second tap on `keyDown`, live only during a session, reports chords and swallows **Esc**. Taps disabled by timeout are re-enabled. |
 | `Input/TriggerKey.swift` | Right ⌘ / ⌥ / ⌃ / ⇧ and Fn: keycodes, device masks, labels. |
@@ -185,13 +185,30 @@ A Swift menu bar app (AppKit + SwiftUI, macOS 13.3+, about 1 MB plus the 8.5 MB 
 | `Output/TextInserter.swift` | Port of `ax_text.insert_at_focus` + paste. It sets `AXSelectedText` on the focused element and verifies it, except for secure fields and web content (an `AXWebArea` ancestor or DOM attributes), which get a paste. Paste saves every pasteboard item, writes the text marked `org.nspasteboard.TransientType`, posts ⌘V, and restores after 350 ms unless the clipboard changed meanwhile. With no focused element the text is copied instead. AX messaging timeout is 1 s. |
 | `History/HistoryStore.swift` | SQLite (WAL) `dictations` table plus an FTS5 external-content index (`text`, `raw_text`, `app_name`, kept in sync by triggers), on a serial queue. Search turns input into quoted prefix terms (`"meet"*`). `stats()`: today/week/total words, speaking time, day streak, and minutes saved vs typing at 40 wpm. `prune(olderThanDays:)` also removes audio. `revision` is published so windows refresh. |
 | `Settings/AppSettings.swift`, `SettingsStore.swift` | Codable settings with tolerant decoding (missing keys keep defaults, values clamped), saved as snake_case `settings.json` on every change and published to observers. |
-| `Settings/LegacyImport.swift` | First launch (no `settings.json`): reads the Hammerspoon `config.yaml` (key, model, dictation trigger/style/hold_ms/max_seconds). Every launch without a key imports just the key. |
+| `Settings/LegacyImport.swift` | Imports the Hammerspoon setup with `MiniYAML`: on first launch everything (dictation, Gemini model/Glean path → `ai.backend`, picker hotkey, sound, diff/answer/reply cards, radial menu, direct replace, history excludes and mistake modes); `modes()` for `ModeStore`; `migrateIfNeeded` once per Mac for installs that predate the fixes (fix settings + `data/history.jsonl` → history DB), marked by `.imported-hammerspoon-v2`; `importAPIKeyIfMissing` on every launch. Radial modes come in as names (`radial_menu.mode_names`) and are matched to mode ids after `ModeStore` loads. `--import-preview` prints what would be imported. |
 | `Settings/Secrets.swift` | The API key file (0600). |
 | `UI/NotchHUD.swift` | The default indicator (`dictation.indicator: "notch"`): a black island that springs out of the MacBook notch. It's a borderless, non-activating `TopPanel` (760×200, above the menu bar at `mainMenu + 2`, ignores the mouse, all Spaces, and won't be pushed below the menu bar). It starts at the notch's exact size (from `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` widths and `safeAreaInsets.top`), then a spring expands `NotchShape` (concave "ears" where it meets the menu bar, rounded bottom). Listening: wings beside the camera with **Flicky** (the mascot: a violet→cyan orb with blinking eyes; it pulses with the voice level, looks around while thinking, ^ ^ when done, worried on error) on the left, and a gradient waveform plus timer on the right, with a glow line along the bottom that breathes with the level. Working/done/info/error: a status row under the notch. Auto-hide shrinks it back into the notch, then orders the panel out. On screens without a notch, the same island grows down from the top centre (virtual notch 150×0). |
 | `UI/HUD.swift` | The facade every caller uses: forwards to `NotchHUD` when `indicator` is `notch`, otherwise shows the bottom-center pill: a borderless, non-activating `NSPanel` (`.statusBar` level, ignores the mouse, all Spaces) hosting SwiftUI. States: Listening (pulsing dot, 26-bar live waveform, timer, "esc to cancel"), working (spinner), done (with a preview), info, and error, with auto-hide. |
-| `UI/HistoryView.swift` | Voice History: stat tiles, full-text search as you type (debounced 120 ms), entries grouped by day with time, app, style and word count. On hover: Copy, Original (the raw transcript), Retry (failed entries), Delete. Export as Markdown. |
+| `UI/HistoryView.swift` | History: stat tiles (dictation words), full-text search as you type (debounced 120 ms), a filter (All / Dictation / Fixes & answers), entries grouped by day with time and app. Dictations show style, engine, words and duration; fixes and answers show the mode, the number of mistakes, and "undone". On hover: Copy, Original / What changed (a fix shows its word diff), Retry (failed dictations), Delete. Export as Markdown. A tip when the menu bar icon is hidden by the notch. |
+| `Modes/Mode.swift` | `Mode` {id, name, hotkey, output replace/show/replies, temperature?, showDiff, enabled, timeoutSeconds?, prompt} with tolerant decoding, and `KeyCombo` (key code + ⌘⇧⌥⌃), stored as names like `["cmd","shift","g"]` (the Hammerspoon format), with symbols for display, Carbon modifiers, and `matches(CGEvent)`. |
+| `Modes/ModeStore.swift` | The ordered modes in `modes.json` (Application Support), published; add / duplicate / delete / move / update, conflict check, restore defaults. A fresh install starts from the Hammerspoon config's modes (`LegacyImport.modes()`), else `DefaultModes`. Order = menu, picker numbers and radial slots. |
+| `Modes/DefaultModes.swift` | The 7 shipped modes, generated from `config.example.yaml` so the prompts match word for word. |
+| `Input/GlobalHotkeys.swift` | Carbon `RegisterEventHotKey` for every enabled mode's shortcut and the picker (no Accessibility needed; the key press is consumed). Re-registered when modes or picker settings change, and paused while a shortcut is being recorded. Combos owned by another app are logged. |
+| `Input/EventTap.swift` | A short-lived CGEventTap for a popup's session (card, picker, radial ring); the handler returns true to swallow. Re-enables itself after a timeout. |
+| `Fixes/FixController.swift` | Port of `text_replacer.lua`: capture (Accessibility, else ⌘C) → HUD working → `TextBackend` → by output: replace (direct write + verify, or paste with the clipboard restored; refuses if the selection changed meanwhile), sound, history (+ mistakes for `mistake_modes`), "what changed" card with Undo; show → answer card (or clipboard); replies → `ReplyData` (first balanced `{…}`) → reply card. Undo: Accessibility restore for direct writes, else ⌘Z (`app`) or shift+← × n and paste (`reselect`). One run at a time. `insert(_:into:)` types a chosen reply at the caret. |
+| `Fixes/Selection.swift` | Port of `ax_text.lua`: `readDirect` (AXSelectedText + range, writable, web-content detection, excluded apps), `canWrite`, `replace` (reselects the captured range and checks it still holds the text), `restore` (undo), and `captureByCopy` (⌘C, waits up to 2 s for the clipboard to change; keeps the old clipboard to restore). |
+| `Fixes/TextBackend.swift` | Runs a mode on text: Gemini (`GeminiClient.rewrite`, the mode's temperature) or the **Glean CLI** (`glean chat --json`, agent FAST, `saveChat: false`; output streamed so a full pipe can't block; auth errors → "run: glean auth login"; timeout). |
+| `Fixes/WordDiff.swift` | Port of `word_diff.lua` (tokenize, prefix/suffix trim, LCS ≤ 250k cells, grouping) and of the mistake classifier from `history.lua` (Capitalization … Word choice). Verified identical to the Lua output with `--diff`. `collapsed(_:context:)` shortens long unchanged stretches. |
+| `Fixes/ProgressStats.swift` | My Progress numbers (port of `history.lua` `stats()`): this week vs last, categories, top 12 repeated corrections (no Rewording), 8 weeks. |
+| `UI/ResultCard.swift` | Port of `diff_bubble.lua`: one non-activating panel, three kinds (diff with Undo, answer rows "Label: text" with Copy, replies 1–n with Copy), under the notch island (or above the bottom pill), countdown bar that pauses on hover. Session tap: undo shortcut (only while the fixed app is frontmost), digits from the typed character (top row or keypad) while armed; other keys dismiss diff/answer cards and pass through, or disarm the reply card; outside clicks close diff/answer cards. `DiffText` renders a diff as one `Text`. |
+| `UI/ModePicker.swift` | Port of `mode_picker.lua`: ⌘⇧P (configurable) captures the selection, then a palette under the notch: type to filter, ↑/↓, Return, 1–9, Esc; clicks run a row. Keys come from a session tap, so focus never leaves your app. |
+| `UI/RadialMenu.swift` | Port of `radial_menu.lua`: a `HotkeyMonitor` on the trigger (Right ⌥) → pending → after `hold_ms` a ring of up to 8 modes at the pointer (flattened ellipse, slot 1 on top, clockwise, spring-out stagger). Pointer direction outside a 28 pt dead zone highlights; release / left click applies, 1–8 apply, right click / Esc cancel, other keys cancel and pass through. Off when its trigger equals the dictation key. |
+| `UI/ModesView.swift` | The Modes page: reorderable list (drag), add / duplicate / delete / restore defaults; the editor (name, enabled, `HotkeyRecorder` with conflict warnings, output, "what changed" toggle, temperature, the prompt) and **Try it**, which runs the prompt on sample text with the real backend. |
+| `UI/MainWindow.swift` | The app window: sidebar History, My Progress, Modes, Dictation, Features, AI, General (`MainNav.page`). |
+| `UI/ProgressView.swift` | `MyProgressView`: weekly tiles with deltas, 8-week bars, mistakes by type, most repeated corrections. |
+| `Settings/MiniYAML.swift` | Reads the YAML subset of the Hammerspoon config (nested maps, lists of maps, flow lists, `|` block scalars, comments) for the import. |
 | `UI/SpeechViews.swift` | `ModelRow` (status, Download with progress, Use, Delete, and a "Neural Engine boost" line) and `SpeechSection` (engine, models, language, keep loaded, Gemini polish, plus a note explaining privacy and translation limits). Used by Settings and Setup. |
-| `UI/SettingsView.swift` | A grouped Form over every setting (Speech recognition first), plus API key Save & Test, open at login, delete all history, and show the settings file and log. |
+| `UI/SettingsView.swift` | The settings pages of the main window: `DictationPane` (speech recognition + dictation + indicator), `FeaturesPane` (text fixes: direct replace, web content, excluded apps, sound; the "what changed" card with undo shortcut and method; answer and reply cards; picker; radial menu), `AIPane` (backend Gemini/Glean, Glean path + Test, Gemini key + model, timeout), `GeneralPane` (history, retention, excluded apps, mistake modes, delete all, open at login, debug). `ListField` edits short string lists. |
 | `UI/SetupView.swift` | The first-run checklist (rechecked every second): Accessibility, Microphone, Speech recognition (download the model, or switch to Gemini and enter a key), open at login, and a "Try it here" text box. |
 | `Support/Paths.swift`, `Log.swift` | Folders (`FLICKWISE_SUPPORT_DIR` overrides Application Support for tests) and the file log (trimmed to 1 MB once it passes 2 MB, POSIX timestamps, transcripts only with `debug`). |
 
@@ -224,6 +241,35 @@ Right ⌘ down (no other modifier) ─► pending
 - Measured with `Flickwise --load-test` (turbo q8 + Neural Engine, 6.4 s clip): reload 0.50–0.75 s, recognize ~1.4 s, so ~2.0 s if nothing overlapped. In practice the load runs while you talk, so release → text stays ~1.4 s. Memory is ~980 MB loaded and 40–220 MB after unloading (the allocator returns memory lazily; no growth over 10 cycles). The first load in a new process is ~1.3 s.
 - History's `engine` column (added by a migration in `HistoryStore.open`, `PRAGMA table_info` then `ALTER TABLE`) records `whisper:<model>` or `gemini:<model>`. It's shown as a tag on each entry.
 
+### Text fixes (the app)
+
+```
+mode shortcut (Carbon) / menu bar Modes / picker row / radial slot
+   └─ FixController.run(mode)          (picker & radial pass the selection they captured)
+        ├─ ResultCard.dismiss()
+        ├─ capture: Selection.readDirect (AX)  →  else captureByCopy (⌘C, old clipboard kept)  →  else "Select some text first"
+        ├─ HUD.working(mode name)   (notch island: Flicky thinking)
+        ├─ TextBackend: Gemini (mode temperature)  |  Glean CLI (Fast agent, chat not saved)
+        └─ output
+             ├─ replies → restore clipboard → ReplyData.parse → reply card (1–n inserts at the caret) | answer card | clipboard
+             ├─ show    → restore clipboard → answer card ("Label: text" rows) | clipboard
+             └─ replace → unchanged? "No changes needed"
+                          → direct write (AX, verified; web content pastes unless web_content = direct)
+                            · "selection changed while working" → result to the clipboard, error, stop
+                          → else paste + restore the clipboard
+                          → sound, HUD "Done 0.8 s", history {kind fix, mode, original, result, mistakes?}
+                          → "what changed" card (unless the mode or setting turns it off) → Undo marks the entry undone
+```
+
+Measured end to end in TextEdit (Gemini flash-lite): Fix Grammar 0.7–1.2 s from shortcut to replaced text; Explain Meaning 1.2 s; Reply Helper 1.0 s.
+
+### Migrating from Hammerspoon
+
+- `macos/install.sh` (step 6b) comments out `require("flickwise")` in `~/.hammerspoon/init.lua` (backup `init.lua.backup.<ts>`) and reloads Hammerspoon, so its hotkeys, radial tap and menu bar item are released before the app registers its own (Carbon refuses combos another app holds). `FLICKWISE_KEEP_HAMMERSPOON=1` skips it. To go back: remove the `-- ` and quit the app.
+- On first launch the app imports modes (`modes.json` absent), settings (first launch) or fix settings + fix history (`migrateIfNeeded`, once), so nothing has to be re-entered. The Hammerspoon files are only read, never changed by the app.
+- The Lua `install.sh` recognises the native app (`app.flickwise.mac` in `~/Applications`) and doesn't add `require("flickwise")` back.
+- Not ported: the resting "idle pill" (the notch island replaces it) and the radial menu's `caret` anchor and chord triggers (modifier triggers only).
+
 ### Speech recognition: measurements (M1 Pro, 16 GB, macOS 26)
 
 Same clips through each recognizer (`Flickwise --benchmark`, synthetic `say` voices: 6 s English with fillers, 20 s English, 6 s Hindi, 2 s silence), seconds from audio to text with the model already loaded:
@@ -251,21 +297,31 @@ Same clips through each recognizer (`Flickwise --benchmark`, synthetic `say` voi
                  "style": "clean", "max_seconds": 300, "microphone": "", "sounds": true, "indicator": "notch" },
   "transcription": { "engine": "local", "model": "large-v3-turbo-q8_0", "language": "auto",
                      "polish_with_gemini": false, "keep_model_loaded": false },
-  "history":   { "enabled": true, "retention_days": 0, "keep_audio": false },
-  "ai":        { "model": "gemini-flash-lite-latest", "timeout_seconds": 60 },
+  "history":   { "enabled": true, "retention_days": 0, "keep_audio": false, "exclude_apps": [],
+                 "mistake_modes": ["Fix Grammar", "Minimal Fix"] },
+  "ai":        { "backend": "gemini", "model": "gemini-flash-lite-latest", "timeout_seconds": 60, "glean_path": "" },
+  "fixes":     { "direct_replace": true, "web_content": "paste", "exclude_apps": [], "sound": "Tink" },
+  "diff_card": { "enabled": true, "duration_seconds": 6, "undo_hotkey": ["cmd", "z"], "undo_method": "app", "context_words": 8 },
+  "result_card": { "enabled": true, "duration_seconds": 15 },
+  "reply_card":  { "enabled": true, "duration_seconds": 45 },
+  "picker":      { "enabled": true, "hotkey": ["shift", "cmd", "p"] },
+  "radial_menu": { "enabled": true, "trigger": "right_option", "hold_ms": 150, "modes": [] },
   "debug": false
 }
 ```
 
-`indicator`: `notch` (island from the notch; top centre on screens without one) or `pill` (bottom capsule). `engine`: `local | gemini`. `model`: a `WhisperModel.catalog` id (`large-v3-turbo-q8_0`, `large-v3-turbo-q5_0`, `large-v3-turbo`, `small`, `base`); unknown ids fall back to the default. `language`: `auto` or a Whisper code (`en`, `ur`, `hi`, …). `trigger`: `right_command | right_option | right_control | right_shift | fn`. `style`: `verbatim | clean | english`. `microphone`: a CoreAudio device UID, or `""` for the system default. `retention_days: 0` keeps everything. Every feature has its `enabled` flag here (the native counterpart of `features:` in `config.yaml`).
+`ai.backend`: `gemini | glean` (text fixes). `undo_method`: `app | reselect`. `radial_menu.modes`: mode ids clockwise from the top (empty = the first 8 enabled modes). Modes themselves live in `modes.json` (an ordered array of `Mode`). `indicator`: `notch` (island from the notch; top centre on screens without one) or `pill` (bottom capsule). `engine`: `local | gemini`. `model`: a `WhisperModel.catalog` id (`large-v3-turbo-q8_0`, `large-v3-turbo-q5_0`, `large-v3-turbo`, `small`, `base`); unknown ids fall back to the default. `language`: `auto` or a Whisper code (`en`, `ur`, `hi`, …). `trigger`: `right_command | right_option | right_control | right_shift | fn`. `style`: `verbatim | clean | english`. `microphone`: a CoreAudio device UID, or `""` for the system default. `retention_days: 0` keeps everything. Every feature has its `enabled` flag here (the native counterpart of `features:` in `config.yaml`).
 
 ### Testing
 
 - `FLICKWISE_SUPPORT_DIR=$(mktemp -d) …/Flickwise --selftest`: text helpers, WAV, settings decoding, and history (insert, FTS search over text/raw/app, update re-indexing, delete, prune, stats, streak).
 - `…/Flickwise --transcribe file.wav`: the real pipeline with the current settings (any audio format; it's converted to 16 kHz mono). Make test audio with `say -o t.wav --data-format=LEI16@16000 "…"` (`-v Lekha` for Hindi).
 - `…/Flickwise --benchmark [--models a,b] [--gemini] [--language xx] [--translate] files…`: load time and per-clip time and text for each downloaded model (and Gemini). **Don't rebuild while a benchmark runs**: the build replaces the running binary.
+- `…/Flickwise --diff cases.json` prints the word diff + mistake categories as JSON for `[[before, after], …]`; the same cases through `lib/word_diff.lua` + `history.classify` (via `hs -c`) must match exactly.
+- `…/Flickwise --import-preview` shows what would be imported from the Hammerspoon config (read-only).
+- Live fixes: a scratch TextEdit document (`osascript … make new document`), select all, press the mode's shortcut with System Events, read the text back, then delete the test entries from `history.sqlite` (`app_name = 'TextEdit'` after the test's start time). System Events types digits as **keypad** keys, which is why the card reads digits from the event's characters.
 - `…/Flickwise --load-test file.wav` (`RUNS=n`): load → recognize → unload cycles with timings and resident memory, which is what `keep_model_loaded: false` costs.
-- `…/Flickwise --render settings|setup|history out.png`: draws a window's view offscreen (dark mode) to check UI without depending on the active Space.
+- `…/Flickwise --render main|history|progress|modes|dictation|features|ai|general|setup out.png` (with a sandbox `FLICKWISE_SUPPORT_DIR`; `FLICKWISE_RENDER_IMPORT=1` fills it with the Hammerspoon fix history). The sidebar window and lazy lists don't draw offscreen: check those in the running app.: draws a window's view offscreen (dark mode) to check UI without depending on the active Space.
 - UI: `FLICKWISE_OPEN=history|settings|hud FLICKWISE_SUPPORT_DIR=<sandbox> …/Flickwise &`, then snapshot it with Hammerspoon (`hs.application.get("app.flickwise.mac"):allWindows()[1]:snapshot()`).
 - The key monitor and insertion need Accessibility, which is granted per signing identity, so test those by hand after a build.
 
@@ -338,5 +394,5 @@ Environment overrides (`FLICKWISE_REPO`, `FLICKWISE_BRANCH`, `FLICKWISE_HS_DIR`,
 - `config.yaml` is user config (hot-reloaded, git-ignored, holds the API key). `config.example.yaml` is the committed template, with an empty key.
 - `flickwise.log` is the runtime log (`notifier`).
 - `data/history.jsonl` is the local fix history (git-ignored, per Mac).
-- Native app: `~/Library/Application Support/Flickwise/` (`settings.json`, `gemini_api_key`, `history.sqlite`, `audio/`, `models/` (Whisper `.bin` files and `*-encoder.mlmodelc`), `signing/`, and `source/` for curl installs) and `~/Library/Logs/Flickwise/flickwise.log`. `macos/build/` and `macos/vendor/` are git-ignored.
+- Native app: `~/Library/Application Support/Flickwise/` (`settings.json`, `modes.json`, `gemini_api_key`, `history.sqlite` (dictations, fixes and answers), `audio/`, `models/`, `.imported-hammerspoon-v2` (Whisper `.bin` files and `*-encoder.mlmodelc`), `signing/`, and `source/` for curl installs) and `~/Library/Logs/Flickwise/flickwise.log`. `macos/build/` and `macos/vendor/` are git-ignored.
 - `IDEAS.md` is the roadmap. Tick items and move them to **Done** when they ship.

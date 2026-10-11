@@ -7,8 +7,10 @@
 import Foundation
 import SQLite3
 
+/// One history entry: a dictation, a text fix, or an answer (show / replies modes).
 struct DictationRecord: Identifiable, Equatable {
     enum Status: String { case inserted, pasted, copied, failed }
+    enum Kind: String { case dictation, fix, answer }
 
     var id: Int64 = 0
     var createdAt: Date
@@ -22,6 +24,10 @@ struct DictationRecord: Identifiable, Equatable {
     var error: String?
     var audioFile: String?          // file name inside Paths.audio
     var engine: String?             // which recognizer produced it, e.g. "whisper:large-v3-turbo-q5_0"
+    var kind: Kind = .dictation     // fixes: rawText = the original selection, text = the result
+    var mode: String?               // fixes/answers: the mode's name
+    var mistakes: [Mistakes.Mistake]? // tracked fixes (My Progress)
+    var undone = false
 
     var wordCount: Int { Self.words(in: text) }
 
@@ -61,8 +67,9 @@ final class HistoryStore: ObservableObject {
     func add(_ r: DictationRecord) -> Int64 {
         let id: Int64 = queue.sync {
             let sql = """
-            INSERT INTO dictations (created_at, duration, app_name, app_bundle, style, raw_text, text, words, status, error, audio_file, engine)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO dictations (created_at, duration, app_name, app_bundle, style, raw_text, text, words, status, error, audio_file, engine,
+                                    kind, mode, mistakes, undone)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             guard let st = prepare(sql) else { return 0 }
             defer { sqlite3_finalize(st) }
@@ -78,12 +85,12 @@ final class HistoryStore: ObservableObject {
         queue.sync {
             let sql = """
             UPDATE dictations SET created_at=?, duration=?, app_name=?, app_bundle=?, style=?, raw_text=?, text=?,
-                   words=?, status=?, error=?, audio_file=?, engine=? WHERE id=?
+                   words=?, status=?, error=?, audio_file=?, engine=?, kind=?, mode=?, mistakes=?, undone=? WHERE id=?
             """
             guard let st = prepare(sql) else { return }
             defer { sqlite3_finalize(st) }
             bind(st, r)
-            sqlite3_bind_int64(st, 13, r.id)
+            sqlite3_bind_int64(st, 17, r.id)
             if sqlite3_step(st) != SQLITE_DONE { logError("update") }
         }
         changed()
@@ -127,20 +134,40 @@ final class HistoryStore: ObservableObject {
 
     // ── reads ───────────────────────────────────────────────────────────────
 
-    func recent(limit: Int = 500) -> [DictationRecord] {
-        queue.sync { select("SELECT \(Self.columns) FROM dictations ORDER BY created_at DESC LIMIT \(limit)") }
+    /// `kinds` nil = everything.
+    func recent(limit: Int = 500, kinds: [DictationRecord.Kind]? = nil) -> [DictationRecord] {
+        queue.sync { select("SELECT \(Self.columns) FROM dictations \(Self.kindFilter(kinds, prefix: "WHERE")) ORDER BY created_at DESC LIMIT \(limit)") }
     }
 
-    func search(_ query: String, limit: Int = 500) -> [DictationRecord] {
+    func search(_ query: String, limit: Int = 500, kinds: [DictationRecord.Kind]? = nil) -> [DictationRecord] {
         let match = Self.ftsQuery(query)
-        guard !match.isEmpty else { return recent(limit: limit) }
+        guard !match.isEmpty else { return recent(limit: limit, kinds: kinds) }
         return queue.sync {
             select("""
                 SELECT \(Self.columns.split(separator: ",").map { "d." + $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", "))
                 FROM dictations_fts f JOIN dictations d ON d.id = f.rowid
-                WHERE dictations_fts MATCH ? ORDER BY d.created_at DESC LIMIT \(limit)
+                WHERE dictations_fts MATCH ? \(Self.kindFilter(kinds, prefix: "AND", table: "d."))
+                ORDER BY d.created_at DESC LIMIT \(limit)
                 """, bind: match)
         }
+    }
+
+    private static func kindFilter(_ kinds: [DictationRecord.Kind]?, prefix: String, table: String = "") -> String {
+        guard let kinds, !kinds.isEmpty else { return "" }
+        return "\(prefix) \(table)kind IN (" + kinds.map { "'\($0.rawValue)'" }.joined(separator: ",") + ")"
+    }
+
+    /// Tracked, not-undone fixes since `since` (for My Progress).
+    func trackedFixes(since: Date) -> [DictationRecord] {
+        queue.sync {
+            select("SELECT \(Self.columns) FROM dictations WHERE kind = 'fix' AND mistakes IS NOT NULL AND undone = 0 "
+                   + "AND created_at >= \(since.timeIntervalSince1970) ORDER BY created_at")
+        }
+    }
+
+    func markUndone(id: Int64) {
+        queue.sync { exec("UPDATE dictations SET undone = 1 WHERE id = \(id)") }
+        changed()
     }
 
     func record(id: Int64) -> DictationRecord? {
@@ -153,7 +180,7 @@ final class HistoryStore: ObservableObject {
             let cal = Calendar.current
             let today = cal.startOfDay(for: Date()).timeIntervalSince1970
             let week = cal.dateInterval(of: .weekOfYear, for: Date())?.start.timeIntervalSince1970 ?? today
-            let ok = "status != 'failed'"
+            let ok = "status != 'failed' AND kind = 'dictation'"
             s.todayWords = intQuery("SELECT COALESCE(SUM(words),0) FROM dictations WHERE \(ok) AND created_at >= \(today)")
             s.weekWords = intQuery("SELECT COALESCE(SUM(words),0) FROM dictations WHERE \(ok) AND created_at >= \(week)")
             s.totalWords = intQuery("SELECT COALESCE(SUM(words),0) FROM dictations WHERE \(ok)")
@@ -179,7 +206,7 @@ final class HistoryStore: ObservableObject {
     // ── schema ──────────────────────────────────────────────────────────────
 
     private static let columns =
-        "id, created_at, duration, app_name, app_bundle, style, raw_text, text, status, error, audio_file, engine"
+        "id, created_at, duration, app_name, app_bundle, style, raw_text, text, status, error, audio_file, engine, kind, mode, mistakes, undone"
 
     private func open() {
         guard sqlite3_open(Paths.history.path, &db) == SQLITE_OK else {
@@ -206,6 +233,10 @@ final class HistoryStore: ObservableObject {
         """)
         exec("CREATE INDEX IF NOT EXISTS dictations_created ON dictations(created_at)")
         addColumnIfMissing("engine", "TEXT")
+        addColumnIfMissing("kind", "TEXT NOT NULL DEFAULT 'dictation'")
+        addColumnIfMissing("mode", "TEXT")
+        addColumnIfMissing("mistakes", "TEXT")
+        addColumnIfMissing("undone", "INTEGER NOT NULL DEFAULT 0")
         exec("""
         CREATE VIRTUAL TABLE IF NOT EXISTS dictations_fts USING fts5(
             text, raw_text, app_name, content='dictations', content_rowid='id', tokenize='unicode61 remove_diacritics 2')
@@ -272,6 +303,10 @@ final class HistoryStore: ObservableObject {
         bindText(st, 10, r.error)
         bindText(st, 11, r.audioFile)
         bindText(st, 12, r.engine)
+        bindText(st, 13, r.kind.rawValue)
+        bindText(st, 14, r.mode)
+        bindText(st, 15, r.mistakes.flatMap { try? String(data: JSONEncoder().encode($0), encoding: .utf8) })
+        sqlite3_bind_int(st, 16, r.undone ? 1 : 0)
     }
 
     private func bindText(_ st: OpaquePointer, _ i: Int32, _ s: String?) {
@@ -323,7 +358,11 @@ final class HistoryStore: ObservableObject {
                 status: DictationRecord.Status(rawValue: text(st, 8) ?? "") ?? .inserted,
                 error: text(st, 9),
                 audioFile: text(st, 10),
-                engine: text(st, 11)))
+                engine: text(st, 11),
+                kind: DictationRecord.Kind(rawValue: text(st, 12) ?? "") ?? .dictation,
+                mode: text(st, 13),
+                mistakes: text(st, 14).flatMap { try? JSONDecoder().decode([Mistakes.Mistake].self, from: Data($0.utf8)) },
+                undone: sqlite3_column_int(st, 15) != 0))
         }
         return out
     }

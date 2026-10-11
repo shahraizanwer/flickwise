@@ -12,7 +12,9 @@
 #   4. Quits a running copy and installs it to ~/Applications/Flickwise.app
 #   5. Downloads the on-device speech model (Whisper large-v3-turbo, ~870 MB, checksum-verified;
 #      skipped when it's already there)
-#   6. Turns off the Hammerspoon version's dictation (so the two don't both listen)
+#   6. Takes over from the Hammerspoon version: comments out require("flickwise") in
+#      ~/.hammerspoon/init.lua (backed up) and reloads Hammerspoon, so its shortcuts are free.
+#      Your modes, settings and fix history are imported by the app on its first launch.
 #   7. Opens Flickwise (the first launch shows a short setup window)
 #
 # Your settings, API key (Keychain) and voice history live outside the app and are never touched.
@@ -29,6 +31,7 @@
 #                              the first launch spends ~2 min preparing it, once)
 #   FLICKWISE_SUPPORT_DIR   data folder (default: ~/Library/Application Support/Flickwise)
 #   FLICKWISE_NO_LAUNCH=1 don't open the app at the end
+#   FLICKWISE_KEEP_HAMMERSPOON=1  keep the Hammerspoon version running (only its dictation is turned off)
 #   FLICKWISE_KEEP_HS_DICTATION=1  leave the Hammerspoon dictation setting alone
 set -euo pipefail
 
@@ -98,10 +101,14 @@ BUILT="$MAC_DIR/build/Flickwise.app"
 step "Installing into $APPS_DIR"
 mkdir -p "$APPS_DIR"
 DEST="$APPS_DIR/Flickwise.app"
-if pgrep -f "$DEST/Contents/MacOS/Flickwise" >/dev/null 2>&1 || pgrep -x Flickwise >/dev/null 2>&1; then
+# Only one copy can run: stop it. (A custom FLICKWISE_APPS_DIR — tests — only stops its own copy.)
+if [ "$APPS_DIR" = "$HOME/Applications" ] && pgrep -x Flickwise >/dev/null 2>&1; then
     osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x Flickwise >/dev/null 2>&1 || break; sleep 0.3; done
     pkill -x Flickwise 2>/dev/null || true
+    ok "Stopped the running copy"
+elif pgrep -f "$DEST/Contents/MacOS/Flickwise" >/dev/null 2>&1; then
+    pkill -f "$DEST/Contents/MacOS/Flickwise" 2>/dev/null || true
     ok "Stopped the running copy"
 fi
 if [ -d "$DEST" ]; then
@@ -175,6 +182,25 @@ if [ "${FLICKWISE_KEEP_HS_DICTATION:-}" != "1" ] && [ -f "$HS_CONFIG" ]; then
         ok "Turned off dictation in the Hammerspoon version (the native app handles it now)"
         info "Backup: $HS_CONFIG.backup.$STAMP"
     fi
+fi
+
+# ── 6b. Hammerspoon's Flickwise steps aside ──────────────────────────────────
+HS_INIT="$HS_DIR/init.lua"
+REQ_RE="^[[:space:]]*require[ (]*[\"']flickwise[\"']"
+if [ "${FLICKWISE_KEEP_HAMMERSPOON:-}" != "1" ] && [ -f "$HS_INIT" ] && grep -Eq "$REQ_RE" "$HS_INIT"; then
+    step "Taking over from the Hammerspoon version"
+    cp "$HS_INIT" "$HS_INIT.backup.$STAMP"
+    sed -E -i '' "s/($REQ_RE.*)$/-- \1  -- replaced by the Flickwise app (macos\/install.sh)/" "$HS_INIT"
+    if [ "$HS_DIR" = "$HOME/.hammerspoon" ] && pgrep -x Hammerspoon >/dev/null 2>&1; then
+        if command -v hs >/dev/null 2>&1 && perl -e 'alarm 6; exec @ARGV' hs -c 'hs.reload()' >/dev/null 2>&1; then :
+        else
+            osascript -e 'quit app "Hammerspoon"' >/dev/null 2>&1 || true
+            sleep 1
+            open -g -a Hammerspoon || true
+        fi
+    fi
+    ok "Flickwise no longer loads in Hammerspoon; the app runs your modes, hotkeys, radial menu and picker"
+    info "Backup: $HS_INIT.backup.$STAMP  (to go back: remove the '-- ' before require(\"flickwise\") and quit the app)"
 fi
 
 # ── 7. Launch ────────────────────────────────────────────────────────────────

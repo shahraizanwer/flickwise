@@ -8,9 +8,9 @@ Flickwise runs inside [Hammerspoon](https://www.hammerspoon.org) (a free macOS a
 
 ---
 
-> **New: native Mac app for dictation.** Hold Right ⌘, speak, let go, and your words are typed
-> anywhere and kept in a searchable Voice History. Speech is recognized on your Mac with
-> Whisper (no API key, no rate limits), and it's faster than the Hammerspoon dictation. See [`macos/README.md`](macos/README.md); install with `macos/install.sh`.
+> **New: Flickwise is now a native Mac app.** Every mode (Fix Grammar, Reply Helper…), editable in
+> the app, plus on-device dictation, the radial menu, the picker and History, with no Hammerspoon
+> needed. Install with `macos/install.sh`: it imports your existing setup. See [`macos/README.md`](macos/README.md). See [`macos/README.md`](macos/README.md); install with `macos/install.sh`.
 
 ## Install (one command)
 
@@ -57,9 +57,9 @@ On another Mac, paste this into Claude Code:
 
 > Install Flickwise on this Mac by running `curl -fsSL https://raw.githubusercontent.com/shahraizanwer/flickwise/main/install.sh | bash`. If I have an old TextFixer install, the script migrates it automatically. Show me the installer output, then tell me which of the "first time on a Mac" steps from https://github.com/shahraizanwer/flickwise#install-one-command I still need to do. Don't print my API key.
 
-To install or update **both** the Hammerspoon version and the native dictation app, paste:
+To install or update the **native app** (recommended; it replaces the Hammerspoon version and imports its setup), paste:
 
-> Update Flickwise on this Mac and install its native dictation app, following "Setting up (or updating) Flickwise on another Mac" in the repo's `CLAUDE.md` (github.com/shahraizanwer/flickwise). Show me the installer output and tell me what I still need to click. Don't print my API key.
+> Install or update the Flickwise app on this Mac, following "Setting up (or updating) Flickwise on another Mac" in the repo's `CLAUDE.md` (github.com/shahraizanwer/flickwise). Show me the installer output and tell me what I still need to click. Don't print my API key.
 
 ---
 

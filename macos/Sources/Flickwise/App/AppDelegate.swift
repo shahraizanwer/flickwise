@@ -1,9 +1,10 @@
-// AppDelegate — wires everything together: settings, the dictation controller,
-// the menu bar item, and the windows. Launch does almost nothing up front (no
+// AppDelegate — wires everything together: settings, modes, the dictation controller, text fixes
+// (global hotkeys, picker, radial menu), the menu bar item, and the windows. Launch does almost nothing up front (no
 // network, no audio) so the app is ready in a few milliseconds.
 import AppKit
 import Combine
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static weak var shared: AppDelegate?
 
@@ -22,25 +23,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NSApp.mainMenu = MainMenu.make(target: self)
         let launchedAtLogin = Self.launchedAsLoginItem()
+        LegacyImport.migrateIfNeeded(store)              // once: Hammerspoon fix settings + fix history
+        resolveImportedRadialModes()
         dictation = DictationController(store: store)
         dictation.onStateChange = { [weak self] _ in self?.updateIcon() }
         setUpStatusItem()
 
+        ModeStore.shared.$modes.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.registerHotkeys() }
+        }.store(in: &bag)
+        store.$settings.map(\.picker).removeDuplicates().dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.registerHotkeys() }
+        }.store(in: &bag)
+        registerHotkeys()
+
         store.$settings.dropFirst().receive(on: RunLoop.main).sink { [weak self] new in
             self?.dictation.apply()
+            RadialMenu.shared.apply()
             self?.updateIcon()
             self?.prepareSpeechModel(new)
             HistoryStore.shared.prune(olderThanDays: new.history.retentionDays)
         }.store(in: &bag)
         NotificationCenter.default.addObserver(forName: ModelStore.didInstall, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.prepareSpeechModel(self.store.settings)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.prepareSpeechModel(self.store.settings)
+            }
         }
         prepareSpeechModel(store.settings)
 
         LegacyImport.importAPIKeyIfMissing()
         HistoryStore.shared.prune(olderThanDays: store.settings.history.retentionDays)
         if !dictation.apply() { waitForAccessibility() }
+        RadialMenu.shared.apply()
         Log.info("Accessibility: \(Permissions.accessibility), microphone: \(Permissions.microphone.rawValue), "
                  + "engine: \(store.settings.transcription.engine.rawValue), ready: \(speechReady)")
         if !Permissions.accessibility || !speechReady || Permissions.microphone != .authorized {
@@ -51,12 +66,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch ProcessInfo.processInfo.environment["FLICKWISE_OPEN"] {   // tests: open a window at launch
         case "history": showHistory()
         case "settings": showSettings()
+        case "modes": show(.modes)
         case "hud": demoHUD()
         default: break
         }
     }
 
-    /// Opening the app again (Finder, Spotlight, Dock) while it runs brings up Voice History.
+    /// Opening the app again (Finder, Spotlight, Dock) while it runs brings up History.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { showHistory() }
         return true
@@ -79,6 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         dictation?.shutdown()
+        RadialMenu.shared.stop()
+        GlobalHotkeys.shared.unregisterAll()
         WhisperEngine.shared.shutdown()
         Log.info("Flickwise stopped")
     }
@@ -86,16 +104,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Called by the setup window as soon as Accessibility is granted.
     func permissionsChanged() {
         if dictation.apply() { axPoll?.invalidate(); axPoll = nil; updateIcon() }
+        RadialMenu.shared.apply()
     }
 
     // ── windows ──────────────────────────────────────────────────────────────
 
-    @objc func showHistory() {
-        WindowManager.shared.show("history", title: "Voice History", size: NSSize(width: 720, height: 640)) { HistoryView() }
+    @objc func showHistory() { show(.history) }
+    @objc func showProgress() { show(.progress) }
+    @objc func showModes() { show(.modes) }
+    @objc func showSettings() {
+        let p = MainNav.shared.page
+        show([.modes, .dictation, .features, .ai, .general].contains(p) ? p : .modes)
     }
 
-    @objc func showSettings() {
-        WindowManager.shared.show("settings", title: "Flickwise Settings", size: NSSize(width: 520, height: 680)) { SettingsView() }
+    func show(_ page: MainNav.Page) {
+        MainNav.shared.page = page
+        WindowManager.shared.show("main", title: "Flickwise", size: NSSize(width: 980, height: 680)) { MainWindowView() }
     }
 
     @objc func showSetup() {
@@ -144,8 +168,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(.separator())
 
-        menu.addItem(item("Voice History…", #selector(showHistory), "h"))
-        let styles = NSMenuItem(title: "Style", action: nil, keyEquivalent: "")
+        let modes = NSMenuItem(title: "Modes", action: nil, keyEquivalent: "")
+        let modesMenu = NSMenu()
+        for m in ModeStore.shared.enabledModes {
+            let it = item(m.name, #selector(runModeFromMenu(_:)), "")
+            it.representedObject = m.id
+            if let hk = m.hotkey { it.title += "    \(hk.display)" }
+            modesMenu.addItem(it)
+        }
+        modesMenu.addItem(.separator())
+        modesMenu.addItem(item("Mode Picker…  \(store.settings.picker.hotkey.display)", #selector(openPicker), ""))
+        modesMenu.addItem(item("Edit Modes…", #selector(showModes), ""))
+        modes.submenu = modesMenu
+        menu.addItem(modes)
+        let features = NSMenuItem(title: "Features", action: nil, keyEquivalent: "")
+        let featuresMenu = NSMenu()
+        for (key, title, on) in featureToggles() {
+            let it = item(title, #selector(toggleFeature(_:)), "")
+            it.representedObject = key
+            it.state = on ? .on : .off
+            featuresMenu.addItem(it)
+        }
+        features.submenu = featuresMenu
+        menu.addItem(features)
+        menu.addItem(.separator())
+        menu.addItem(item("Open Flickwise…", #selector(showHistory), "o"))
+        menu.addItem(item("My Progress…", #selector(showProgress), ""))
+        let styles = NSMenuItem(title: "Dictation Style", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         for style in DictationStyle.allCases {
             let it = item(style.title, #selector(pickStyle(_:)), "")
@@ -174,6 +223,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let raw = sender.representedObject as? String, let style = DictationStyle(rawValue: raw) {
             store.settings.dictation.style = style
         }
+    }
+
+    @objc private func runModeFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, let mode = ModeStore.shared.mode(id: id) else { return }
+        // The menu closes first; the app you were in still has focus (a menu bar menu doesn't take it).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { FixController.shared.run(mode) }
+    }
+
+    @objc private func openPicker() { ModePicker.shared.open() }
+
+    private func featureToggles() -> [(String, String, Bool)] {
+        let s = store.settings
+        return [
+            ("dictation", "Voice Dictation (Hold \(s.dictation.trigger.short))", s.dictation.enabled),
+            ("diff", "“What Changed” Card + Undo", s.diffCard.enabled),
+            ("radial", "Radial Menu (Hold \(s.radialMenu.trigger.short))", s.radialMenu.enabled),
+            ("picker", "Mode Picker (\(s.picker.hotkey.display))", s.picker.enabled),
+            ("direct", "Replace Without Clipboard", s.fixes.directReplace),
+            ("answer", "Answer Card", s.resultCard.enabled),
+            ("reply", "Reply Helper Card", s.replyCard.enabled),
+            ("history", "History & My Progress", s.history.enabled),
+        ]
+    }
+
+    @objc private func toggleFeature(_ sender: NSMenuItem) {
+        switch sender.representedObject as? String {
+        case "dictation": store.settings.dictation.enabled.toggle()
+        case "diff": store.settings.diffCard.enabled.toggle()
+        case "radial": store.settings.radialMenu.enabled.toggle()
+        case "picker": store.settings.picker.enabled.toggle()
+        case "direct": store.settings.fixes.directReplace.toggle()
+        case "answer": store.settings.resultCard.enabled.toggle()
+        case "reply": store.settings.replyCard.enabled.toggle()
+        case "history": store.settings.history.enabled.toggle()
+        default: break
+        }
+    }
+
+    // ── text fixes ───────────────────────────────────────────────────────────
+
+    /// Every enabled mode with a shortcut, plus the picker. Re-run whenever modes or settings change.
+    func registerHotkeys() {
+        var entries: [(combo: KeyCombo, label: String, action: () -> Void)] = []
+        for m in ModeStore.shared.enabledModes {
+            guard let hk = m.hotkey else { continue }
+            let id = m.id
+            entries.append((hk, m.name, {
+                guard let mode = ModeStore.shared.mode(id: id) else { return }
+                FixController.shared.run(mode)
+            }))
+        }
+        if store.settings.picker.enabled {
+            entries.append((store.settings.picker.hotkey, "Mode picker", { ModePicker.shared.open() }))
+        }
+        GlobalHotkeys.shared.register(entries)
+    }
+
+    /// Radial menu modes imported from Hammerspoon by name → ids, once modes exist.
+    private func resolveImportedRadialModes() {
+        let names = store.settings.radialMenu.modeNames
+        guard !names.isEmpty else { return }
+        let modes = ModeStore.shared.modes
+        store.settings.radialMenu.modes = names.compactMap { n in modes.first { $0.name == n }?.id }
+        store.settings.radialMenu.modeNames = []
     }
 
     @objc private func togglePause() {
@@ -226,7 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         axPoll?.invalidate()
         axPoll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             guard Permissions.accessibility else { return }
-            self?.permissionsChanged()
+            MainActor.assumeIsolated { self?.permissionsChanged() }
         }
     }
 
