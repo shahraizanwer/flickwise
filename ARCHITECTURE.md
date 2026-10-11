@@ -4,13 +4,14 @@ How Flickwise is put together and how a fix flows through it. **Keep this file
 current:** any change to behavior, modules, config keys, or data flow updates
 this document in the same change (see `CLAUDE.md`).
 
-_Last updated: 2026-09-30 (Reply Helper: `output: "replies"`, reply card, insert at caret)._
+_Last updated: 2026-10-11 (Native app: on-device Whisper via whisper.cpp is the default recognizer; Gemini optional)._
 
 ---
 
 ## Runtime
 
-- Runs entirely inside **Hammerspoon** (Lua 5.4). There is no build step. Hammerspoon loads `~/.hammerspoon/init.lua`, which runs `require("flickwise")`, and that loads `flickwise/init.lua`.
+- **Two apps, one repo, during the move to native:** the text-fix features run inside **Hammerspoon** (described in most of this file), and **dictation now runs in the native app** in `macos/` (see "Native app" below). The native installer turns off `features.dictation` in the Hammerspoon config so only one of them listens.
+- The Hammerspoon part runs entirely inside **Hammerspoon** (Lua 5.4). There is no build step. Hammerspoon loads `~/.hammerspoon/init.lua`, which runs `require("flickwise")`, and that loads `flickwise/init.lua`.
 - UI surfaces (the pill, the picker, the diff bubble and the radial menu) are borderless, **non-activating** `hs.webview` windows, so the app you are typing in keeps focus. The HTML, CSS and JS for each one live inline in its Lua module.
 - Keyboard input for the popups comes from short-lived `hs.eventtap`s, never from giving focus to a webview.
 - AI backends: **Gemini** over HTTP (`ai_client.lua`) or the **Glean CLI** (`glean_client.lua`). The backend is Glean when `glean_binary_path` is set, otherwise Gemini.
@@ -32,6 +33,7 @@ _Last updated: 2026-09-30 (Reply Helper: `output: "replies"`, reply card, insert
 | `lib/history_window.lua` | **History & Progress…** window: searchable history with diffs and Copy/Delete, plus the My Progress tab. |
 | `lib/word_diff.lua` | Pure-Lua word-level diff: tokenize, trim the common prefix and suffix, run LCS, and group edits. No AI call. |
 | `lib/radial_menu.lua` | Hold-and-flick ring of modes at the pointer (`features.radial_menu`). Applies through `text_replacer.run`. |
+| `lib/dictation.lua` | Hold-to-talk dictation (`features.dictation`): records with ffmpeg, transcribes with Gemini or local whisper.cpp, optionally polishes the text, and types it at the caret via `text_replacer.insert_text`. |
 | `lib/mode_picker.lua` | ⌘⇧P command palette above the pill. Captures the selection, then calls `text_replacer.run_with_text`. |
 | `lib/menubar_ui.lua` | Menu bar icon and menu: modes, Edit Modes, the **Features** submenu (toggles), and Advanced. |
 | `lib/prompt_editor.lua` | "Edit Modes…" window. Edits `config.yaml` line by line (update prompt, add mode, delete mode). |
@@ -137,6 +139,136 @@ The radial menu captures nothing itself. When the trigger is released it calls `
 - **Rendering:** the webview is preloaded in `configure()` so the first hold opens instantly. `render()` runs while the window is hidden, and `enter()` runs after `show()`, because a hidden webview never fires rAF. Pills spring out from the hub with a 30 ms stagger (`--i`). On apply, the chosen pill pops and the ring fades. `text_replacer.run` fires 60 ms later.
 - It won't open while a run is in flight, and opening it dismisses the diff bubble.
 
+## Voice dictation (`lib/dictation.lua`)
+
+> Superseded by the native app (`macos/`, below), which starts recording instantly and keeps a Voice History. `macos/install.sh` sets this feature's `enabled: false`; the Lua module stays for Macs without the native app.
+
+- **Trigger:** hold a right-hand modifier (`trigger`, default `right_control`; also `right_command`, `right_shift`, `right_option`, `fn`). It uses the same persistent `flagsChanged` tap pattern as the radial menu and never swallows modifier events. A session starts **pending** and recording begins only after `hold_ms` (200), so a tap or a chord (another key or modifier while pending) does nothing. `features.normalize` disables dictation if its trigger equals the radial menu's.
+- **Record:** `ffmpeg -f avfoundation` (`microphone`, default device) writes 16 kHz mono WAV to `$TMPDIR/flickwise-dictation.wav`, capped at `max_seconds`. `-probesize 32 -analyzeduration 0 -fflags nobuffer` cut startup from ~2.5 s to ~1 s. The pill says **Starting mic…** and switches to **Listening…** at ffmpeg's first progress line (`size=`), i.e. once audio is flowing. Releasing sends SIGINT (`task:interrupt()`), so ffmpeg finalizes the file and its exit callback continues. Esc cancels. Audio shorter than ~0.5 s counts as a stray tap. The WAV is deleted as soon as the transcript is back.
+- **Transcribe (step 1, verbatim):** `provider: gemini` sends the audio as `inline_data` to `ai_client.transcribe` (temperature 0). `provider: whisper` runs `whisper-cli -m <whisper_model> -f wav -nt -np -l <language>` (offline).
+- **Polish (step 2, text):** `style: clean` (fix fillers and grammar, same language) or `english` (translate Urdu/Hindi/mixed and polish) rewrites the transcript through `ai_client.transform`. `verbatim` skips it. This is a separate text call because Gemini's audio mode keeps "um/uh/like" however it is prompted, while a text rewrite follows the instruction reliably. If it fails, the raw transcript is used.
+- **Insert:** `text_replacer.insert_text` (Accessibility, or paste with clipboard restore). `[NO_SPEECH]` or empty text shows "Didn't catch any speech".
+- **Needs:** ffmpeg (`brew install ffmpeg`), microphone permission for Hammerspoon, Accessibility, and (for `gemini`) the API key. The `glean` backend can't take audio, so `provider: gemini` needs a Gemini key even when Glean handles fixes.
+- **State machine:** `pending → starting → recording → processing`. Every exit goes through `end_session()` or `cancel()`, which stop the timer and key tap and delete the WAV. The exit callback runs under `xpcall` so an error can't leave the session stuck.
+- Testing note: posting `hs -c` commands that time out leaves stale CLI sessions that make `print` error ("ipc port is no longer valid"). Use `hs -q`, and restart Hammerspoon if it happens.
+
+## Native app (`macos/`)
+
+A Swift menu bar app (AppKit + SwiftUI, macOS 13.3+, about 1 MB plus the 8.5 MB whisper.cpp framework) that does hold-to-talk dictation, recognizing speech **on the Mac with Whisper** by default, and keeps a searchable **Voice History**. It is the long-term home for every Flickwise feature (IDEAS 5.1); dictation is the first to move.
+
+### Build, sign, install
+
+- **No Xcode and no SwiftPM:** `macos/scripts/build.sh` calls `swiftc` directly on `Sources/**/*.swift` (whole-module optimized, `-lsqlite3`), then assembles `build/Flickwise.app` (Info.plist with `__VERSION__` from `macos/VERSION` and `__BUILD__` = the git commit count, plus an icon made from `assets/flickwise-icon-1024.png`). SwiftPM was dropped because a stale Command Line Tools install can ship a mismatched `PackageDescription`.
+- **whisper.cpp:** `build.sh` downloads the official prebuilt `whisper-b5130-xcframework.zip` (whisper.cpp v1.9.4) once into `macos/vendor/` (git-ignored), checks its SHA-256, and takes the `macos-arm64_x86_64/whisper.framework` slice (universal, Metal + Core ML, with a module map so Swift can `import whisper`). It links with `-F vendor/... -framework whisper` and rpath `@executable_path/../Frameworks`, copies the framework into `Contents/Frameworks/`, and signs it before the app. The minimum macOS is 13.3 because of the framework. To upgrade, change `WHISPER_TAG`/`WHISPER_SHA256`.
+- **Stale-CLT workaround:** if the toolchain has both `usr/include/swift/module.modulemap` (a 2023 leftover) and `bridging.modulemap`, every import fails with "redefinition of module 'SwiftBridging'". The build hides the stale file with a VFS overlay (`-vfsoverlay` and `-Xcc -ivfsoverlay`), so no sudo is needed.
+- **Stable signature:** `scripts/signing-identity.sh` creates (once) a self-signed "Flickwise Local Signing" code-signing certificate in its own keychain (`~/Library/Application Support/Flickwise/signing/`, added to the user search list). Its designated requirement is `identifier "app.flickwise.mac" and certificate leaf = H"…"`, so **TCC grants (Accessibility, Microphone) survive rebuilds**. Ad-hoc signing (the fallback) changes the requirement on every build.
+- **Why the API key is not in the Keychain:** without an Apple Team ID, Keychain items are bound to the binary's cdhash, so every rebuild shows a blocking "wants to access key" password prompt (which hung the launch inside `SecItemCopyMatching`). The key lives in `gemini_api_key` (mode 0600) in Application Support instead (`Secrets.swift`).
+- `macos/install.sh` (idempotent, non-interactive): checks macOS 13+ and `swiftc`; builds from the checkout it's in, or clones/pulls into `~/Library/Application Support/Flickwise/source` when piped from curl; quits the running copy; installs to `~/Applications/Flickwise.app`; **downloads the speech model** (`FLICKWISE_MODEL`, default `large-v3-turbo-q8_0`; the URL, checksum and path come from `Flickwise --model-info`, so the catalog lives only in Swift; `curl -C -` resumes, then `shasum` verifies, then the `.part` file is renamed; skipped if present; `FLICKWISE_SKIP_MODEL=1` skips it) and, with `FLICKWISE_NEURAL_ENGINE=1`, the Core ML encoder (`--coreml-info`, unzipped with `ditto`) (replacing the Hammerspoon Spotlight launcher, which `install.sh` then no longer recreates); flips `features.dictation.enabled` to false in `~/.hammerspoon/flickwise/config.yaml` (backup first, `FLICKWISE_KEEP_HS_DICTATION=1` to skip); opens the app. Overrides: `FLICKWISE_REPO`, `FLICKWISE_BRANCH`, `FLICKWISE_SRC`, `FLICKWISE_APPS_DIR`, `FLICKWISE_HS_DIR`, `FLICKWISE_NO_LAUNCH`.
+
+### Module map (`macos/Sources/Flickwise/`)
+
+| File | Role |
+|---|---|
+| `App/main.swift` | Entry point. `--selftest`, `--transcribe <wav>`, `--benchmark …`, `--model-info`, `--coreml-info`, `--render <view> <png>` run headless (`App/SelfTest.swift`, `App/Benchmark.swift`) and free the Whisper model before exiting; otherwise starts NSApplication as an accessory (menu bar) app. |
+| `App/AppDelegate.swift` | Wires settings → `DictationController`, builds the status item menu (rebuilt on open: status line, words today, Voice History, Style submenu, Pause, Settings, Set Up), opens Setup when a permission or the recognizer is missing, **otherwise opens Voice History when launched by hand** (not when launched as a login item: `keyAELaunchedAsLogInItem`), handles **reopen** (opening the app again while it runs shows Voice History), polls for Accessibility, prunes history. `menuBarIconHidden` is true when macOS has put the status item behind the camera notch (its window lies outside the screen's `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`), which happens when the menu bar is full; Voice History then shows a tip. Single-instance. `FLICKWISE_OPEN=history|settings|hud` opens a window (or plays a HUD demo) at launch for testing. |
+| `App/MainMenu.swift` | The app menu shown while a window is open (About, Settings… ⌘,, Set Up, Hide, Quit; Edit with Cut/Copy/Paste/Select All, which text fields need for ⌘V; Window). |
+| `App/WindowManager.swift` | Opens History / Settings / Setup as normal windows hosting SwiftUI, with `collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]` so they appear on the current Space even over a full-screen app (otherwise they open on a desktop Space and seem not to open). While any is open the app is `.regular` (Dock and ⌘-Tab); when the last closes it goes back to `.accessory`. |
+| `App/Permissions.swift` | Accessibility (`AXIsProcessTrustedWithOptions`), Microphone (`AVCaptureDevice`), System Settings deep links, and the login item (`SMAppService.mainApp`). |
+| `Input/HotkeyMonitor.swift` | A persistent `CGEventTap` on `flagsChanged` reports press/release of the trigger. It tells left from right by the device-dependent flag bit and never swallows modifiers. A second tap on `keyDown`, live only during a session, reports chords and swallows **Esc**. Taps disabled by timeout are re-enabled. |
+| `Input/TriggerKey.swift` | Right ⌘ / ⌥ / ⌃ / ⇧ and Fn: keycodes, device masks, labels. |
+| `Audio/AudioRecorder.swift` | `AVAudioEngine` input tap → `AVAudioConverter` → 16 kHz mono Int16 PCM in memory (no temp file). Optional input device by CoreAudio UID. Reports a smoothed 0…1 level for the waveform. `WAV.encode` adds the 44-byte header. `AudioDevices` lists inputs. |
+| `Transcription/WhisperModel.swift` | The model catalog (id, size, SHA-256, `translates`, optional Core ML `Asset`) for `huggingface.co/ggerganov/whisper.cpp`, and `ModelStore`, which downloads with URLSession (progress published in 0.5% steps), verifies SHA-256 by streaming, renames `.part` into `models/`, and deletes models. Core ML encoders arrive as `<name>-encoder.mlmodelc.zip`; they are verified, unpacked with `ditto`, and placed beside the model (whisper.cpp finds them by name: the model id without its `-qN_M` suffix). Posts `ModelStore.didInstall`. |
+| `Transcription/WhisperEngine.swift` | whisper.cpp in process, on one serial queue. `preload` (load once and keep), `transcribe(pcm:model:language:translate:)` (greedy, no timestamps, no context, `suppress_nst`, flash attention, GPU), `isReady` (lock-protected, so the main thread never waits on a load), `unload`, and `shutdown()`, which **must** run before exit (ggml's Metal backend asserts at `exit()` if a context still holds buffers). whisper.cpp logs are routed to our log (errors only, minus "failed to load Core ML model"). |
+| `Transcription/Transcriber.swift` | Recording → `Transcript{raw, text, engine}`. The **speech gate** comes first: `Speech.trimmedToSpeech` (30 ms RMS frames; threshold = max(0.005, min(3× the 10th-percentile floor, 30% of the loudest frame)); at least 6 voiced frames; 300 ms padding) returns nil on silence. The cap at 30% of the peak matters: a short clip with no pauses ("Hello there.") has no real noise floor, and the first version (3× the 20th percentile) rejected every short dictation. Rejections log their levels (numbers only); `Flickwise --gate files…` prints the same numbers at several mic gains, for both engines (Whisper and Gemini both invent text from silence). Local: Whisper (translate only for style `english` with a model that `translates`), then `Speech.dropHallucination` and `Speech.cleanFillers` for non-verbatim styles. Gemini: cloud transcription. Gemini polish runs when the engine is Gemini, or with `polish_with_gemini` and a key. |
+| `AI/GeminiClient.swift` | `transcribe(wav:)` (inline audio, temperature 0) and `rewrite(text:instructions:)` over URLSession async, typed errors (`GeminiError`), the same post-processing as `ai_client.lua`, and `warmUp()` (a HEAD request that opens the TLS connection). `Prompts` holds the same transcribe/polish prompts as `lib/dictation.lua`. |
+| `Dictation/DictationController.swift` | The state machine, the processing pipeline, and Retry (below). |
+| `Output/TextInserter.swift` | Port of `ax_text.insert_at_focus` + paste. It sets `AXSelectedText` on the focused element and verifies it, except for secure fields and web content (an `AXWebArea` ancestor or DOM attributes), which get a paste. Paste saves every pasteboard item, writes the text marked `org.nspasteboard.TransientType`, posts ⌘V, and restores after 350 ms unless the clipboard changed meanwhile. With no focused element the text is copied instead. AX messaging timeout is 1 s. |
+| `History/HistoryStore.swift` | SQLite (WAL) `dictations` table plus an FTS5 external-content index (`text`, `raw_text`, `app_name`, kept in sync by triggers), on a serial queue. Search turns input into quoted prefix terms (`"meet"*`). `stats()`: today/week/total words, speaking time, day streak, and minutes saved vs typing at 40 wpm. `prune(olderThanDays:)` also removes audio. `revision` is published so windows refresh. |
+| `Settings/AppSettings.swift`, `SettingsStore.swift` | Codable settings with tolerant decoding (missing keys keep defaults, values clamped), saved as snake_case `settings.json` on every change and published to observers. |
+| `Settings/LegacyImport.swift` | First launch (no `settings.json`): reads the Hammerspoon `config.yaml` (key, model, dictation trigger/style/hold_ms/max_seconds). Every launch without a key imports just the key. |
+| `Settings/Secrets.swift` | The API key file (0600). |
+| `UI/NotchHUD.swift` | The default indicator (`dictation.indicator: "notch"`): a black island that springs out of the MacBook notch. It's a borderless, non-activating `TopPanel` (760×200, above the menu bar at `mainMenu + 2`, ignores the mouse, all Spaces, and won't be pushed below the menu bar). It starts at the notch's exact size (from `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` widths and `safeAreaInsets.top`), then a spring expands `NotchShape` (concave "ears" where it meets the menu bar, rounded bottom). Listening: wings beside the camera with **Flicky** (the mascot: a violet→cyan orb with blinking eyes; it pulses with the voice level, looks around while thinking, ^ ^ when done, worried on error) on the left, and a gradient waveform plus timer on the right, with a glow line along the bottom that breathes with the level. Working/done/info/error: a status row under the notch. Auto-hide shrinks it back into the notch, then orders the panel out. On screens without a notch, the same island grows down from the top centre (virtual notch 150×0). |
+| `UI/HUD.swift` | The facade every caller uses: forwards to `NotchHUD` when `indicator` is `notch`, otherwise shows the bottom-center pill: a borderless, non-activating `NSPanel` (`.statusBar` level, ignores the mouse, all Spaces) hosting SwiftUI. States: Listening (pulsing dot, 26-bar live waveform, timer, "esc to cancel"), working (spinner), done (with a preview), info, and error, with auto-hide. |
+| `UI/HistoryView.swift` | Voice History: stat tiles, full-text search as you type (debounced 120 ms), entries grouped by day with time, app, style and word count. On hover: Copy, Original (the raw transcript), Retry (failed entries), Delete. Export as Markdown. |
+| `UI/SpeechViews.swift` | `ModelRow` (status, Download with progress, Use, Delete, and a "Neural Engine boost" line) and `SpeechSection` (engine, models, language, keep loaded, Gemini polish, plus a note explaining privacy and translation limits). Used by Settings and Setup. |
+| `UI/SettingsView.swift` | A grouped Form over every setting (Speech recognition first), plus API key Save & Test, open at login, delete all history, and show the settings file and log. |
+| `UI/SetupView.swift` | The first-run checklist (rechecked every second): Accessibility, Microphone, Speech recognition (download the model, or switch to Gemini and enter a key), open at login, and a "Try it here" text box. |
+| `Support/Paths.swift`, `Log.swift` | Folders (`FLICKWISE_SUPPORT_DIR` overrides Application Support for tests) and the file log (trimmed to 1 MB once it passes 2 MB, POSIX timestamps, transcripts only with `debug`). |
+
+### Dictation flow
+
+```
+Right ⌘ down (no other modifier) ─► pending
+   ├─ instant_start + mic authorized → engine starts now (audio queue)      ← first word never clipped
+   ├─ engine gemini → GeminiClient.warmUp()                                  ← TLS while you speak
+   ├─ other key / modifier (chord) or release before hold_ms → discard audio, back to idle (silent)
+   └─ hold_ms passes → recording: HUD Listening + waveform, "Pop", max_seconds timer,
+        prepareEngine(): load the Whisper model if it isn't loaded              ← ~0.6 s while you speak
+        ├─ Esc → discard, "Cancelled"
+        └─ release (or max_seconds) → processing: engine stops → WAV in memory
+             ├─ < 0.5 s → "Too short"
+             ├─ speech gate: no speech → "Didn't catch any speech" (nothing is sent anywhere)
+             ├─ local: Whisper (model kept loaded; "Loading speech model…" if it isn't ready yet)
+             │    → drop hallucinations → clean fillers (styles clean/english)
+             ├─ gemini: transcribe (verbatim) → "[NO_SPEECH]"/empty → "Didn't catch any speech"
+             ├─ Gemini rewrite if engine=gemini or polish_with_gemini (falls back to the transcript on error)
+             ├─ TextInserter.insert → HUD "Inserted"/"Copied" + "Tink"
+             ├─ history.add({text, raw, app (frontmost at key-down), style, duration, status, engine})
+             └─ any recognizer error → audio saved to audio/<uuid>.wav, entry status "failed", HUD says Retry is in History
+```
+
+- Event-tap callbacks only enqueue work on the main queue (nothing slow runs inside a tap). The audio engine starts and stops on a serial `userInteractive` queue. A `session` counter makes stale timers and callbacks no-ops.
+- **Retry** (History → Retry) re-runs the saved audio with the entry's style, copies the result to the clipboard (focus is on the History window, not where you were typing), updates the entry, and deletes the audio unless `keep_audio`.
+- One dictation at a time: pressing while processing shows "Still working on the last one…".
+- **Model memory (`keep_model_loaded`, default false = on demand):** the model is loaded when a hold becomes a recording (after `hold_ms`, not on key-down, so Right ⌘ shortcuts never load it). The ~0.6 s load overlaps with your speech, and the model is freed after the dictation, a cancel, or a Retry (`releaseModelIfIdle`). At launch, after a download, and on setting changes, `prepareSpeechModel` runs `WhisperEngine.warmUp` (load + free), so one-time setup after an install or update (~20 s of GPU/Neural Engine compile) never lands on a dictation. With `keep_model_loaded: true` the model is preloaded and kept (~1 GB). It's always unloaded when the engine is Gemini.
+- Measured with `Flickwise --load-test` (turbo q8 + Neural Engine, 6.4 s clip): reload 0.50–0.75 s, recognize ~1.4 s, so ~2.0 s if nothing overlapped. In practice the load runs while you talk, so release → text stays ~1.4 s. Memory is ~980 MB loaded and 40–220 MB after unloading (the allocator returns memory lazily; no growth over 10 cycles). The first load in a new process is ~1.3 s.
+- History's `engine` column (added by a migration in `HistoryStore.open`, `PRAGMA table_info` then `ALTER TABLE`) records `whisper:<model>` or `gemini:<model>`. It's shown as a tag on each entry.
+
+### Speech recognition: measurements (M1 Pro, 16 GB, macOS 26)
+
+Same clips through each recognizer (`Flickwise --benchmark`, synthetic `say` voices: 6 s English with fillers, 20 s English, 6 s Hindi, 2 s silence), seconds from audio to text with the model already loaded:
+
+| Recognizer | Size | 6 s / 20 s / Hindi | Notes |
+|---|---|---|---|
+| Whisper large-v3-turbo q8_0 **+ Neural Engine encoder** | 874 MB + 1.2 GB | **1.31 / 1.45 / 1.49** | Fastest turbo. First load compiles the encoder (~130 s, once); later loads take ~2 s |
+| Whisper large-v3-turbo q8_0 (default) | 874 MB | 1.76 / 1.92 / 1.94 | Same text as full and q5 |
+| Whisper large-v3-turbo (f16) | 1.6 GB | 1.67 / 1.85 / 1.87 | |
+| Whisper large-v3-turbo q5_0 | 574 MB | 2.00 / 2.14 / 2.16 | Smaller but slower on Metal |
+| Whisper small | 488 MB | 0.43 / 0.68 / 0.50 | Same English; dropped half of the Hindi sentence. The Core ML encoder gave no gain |
+| Whisper base | 148 MB | 0.17 / 0.29 / 0.80 | Small English slips; Hindi came out in Urdu script |
+| Gemini flash-lite (cloud) | — | 2.72 / 2.76 / 1.74 | + ~0.7 s for the polish call; network-dependent, rate-limited; **invented a sentence from silence** |
+
+- Turbo's time barely depends on clip length: the encoder always processes a 30 s window. Shrinking it (`audio_ctx`) made turbo produce garbage on short clips, so it isn't used. Flash attention is 25% faster than without.
+- First Metal use after installing compiles GPU shaders (~20 s, once; macOS caches them).
+- Turbo keeps fillers ("Um, so, … like"), which `Speech.cleanFillers` removes for Clean up / Polished English. Turbo does **not** translate (it was trained without translation data), so Polished English from Urdu/Hindi speech needs Small (`translate`) or Gemini polish.
+- Memory: about 1 GB resident with turbo q8 loaded, which is why loading on demand is the default.
+
+### Settings (`settings.json`)
+
+```json
+{
+  "dictation": { "enabled": true, "trigger": "right_command", "hold_ms": 200, "instant_start": true,
+                 "style": "clean", "max_seconds": 300, "microphone": "", "sounds": true, "indicator": "notch" },
+  "transcription": { "engine": "local", "model": "large-v3-turbo-q8_0", "language": "auto",
+                     "polish_with_gemini": false, "keep_model_loaded": false },
+  "history":   { "enabled": true, "retention_days": 0, "keep_audio": false },
+  "ai":        { "model": "gemini-flash-lite-latest", "timeout_seconds": 60 },
+  "debug": false
+}
+```
+
+`indicator`: `notch` (island from the notch; top centre on screens without one) or `pill` (bottom capsule). `engine`: `local | gemini`. `model`: a `WhisperModel.catalog` id (`large-v3-turbo-q8_0`, `large-v3-turbo-q5_0`, `large-v3-turbo`, `small`, `base`); unknown ids fall back to the default. `language`: `auto` or a Whisper code (`en`, `ur`, `hi`, …). `trigger`: `right_command | right_option | right_control | right_shift | fn`. `style`: `verbatim | clean | english`. `microphone`: a CoreAudio device UID, or `""` for the system default. `retention_days: 0` keeps everything. Every feature has its `enabled` flag here (the native counterpart of `features:` in `config.yaml`).
+
+### Testing
+
+- `FLICKWISE_SUPPORT_DIR=$(mktemp -d) …/Flickwise --selftest`: text helpers, WAV, settings decoding, and history (insert, FTS search over text/raw/app, update re-indexing, delete, prune, stats, streak).
+- `…/Flickwise --transcribe file.wav`: the real pipeline with the current settings (any audio format; it's converted to 16 kHz mono). Make test audio with `say -o t.wav --data-format=LEI16@16000 "…"` (`-v Lekha` for Hindi).
+- `…/Flickwise --benchmark [--models a,b] [--gemini] [--language xx] [--translate] files…`: load time and per-clip time and text for each downloaded model (and Gemini). **Don't rebuild while a benchmark runs**: the build replaces the running binary.
+- `…/Flickwise --load-test file.wav` (`RUNS=n`): load → recognize → unload cycles with timings and resident memory, which is what `keep_model_loaded: false` costs.
+- `…/Flickwise --render settings|setup|history out.png`: draws a window's view offscreen (dark mode) to check UI without depending on the active Space.
+- UI: `FLICKWISE_OPEN=history|settings|hud FLICKWISE_SUPPORT_DIR=<sandbox> …/Flickwise &`, then snapshot it with Hammerspoon (`hs.application.get("app.flickwise.mac"):allWindows()[1]:snapshot()`).
+- The key monitor and insertion need Accessibility, which is granted per signing identity, so test those by hand after a build.
+
 ## Config shape
 
 `config.yaml` → `config_loader.load` returns:
@@ -152,6 +284,8 @@ The radial menu captures nothing itself. When the trigger is released it calls `
     idle_pill   = { enabled },
     diff_bubble = { enabled, duration_seconds, undo_hotkey, undo_method, context_words },
     radial_menu = { enabled, trigger (string | chord list), hold_ms, anchor, modes },
+    dictation   = { enabled, trigger, hold_ms, provider ("gemini" | "whisper"), style ("verbatim" | "clean" | "english"),
+                    max_seconds, microphone, language, whisper_model, whisper_bin, ffmpeg_path },
     direct_replace = { enabled, web_content ("paste" | "direct"), exclude_apps },
     result_card    = { enabled, duration_seconds },
     reply_helper   = { enabled, duration_seconds },
@@ -204,4 +338,5 @@ Environment overrides (`FLICKWISE_REPO`, `FLICKWISE_BRANCH`, `FLICKWISE_HS_DIR`,
 - `config.yaml` is user config (hot-reloaded, git-ignored, holds the API key). `config.example.yaml` is the committed template, with an empty key.
 - `flickwise.log` is the runtime log (`notifier`).
 - `data/history.jsonl` is the local fix history (git-ignored, per Mac).
+- Native app: `~/Library/Application Support/Flickwise/` (`settings.json`, `gemini_api_key`, `history.sqlite`, `audio/`, `models/` (Whisper `.bin` files and `*-encoder.mlmodelc`), `signing/`, and `source/` for curl installs) and `~/Library/Logs/Flickwise/flickwise.log`. `macos/build/` and `macos/vendor/` are git-ignored.
 - `IDEAS.md` is the roadmap. Tick items and move them to **Done** when they ship.

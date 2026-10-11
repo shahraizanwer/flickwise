@@ -172,6 +172,9 @@ fi
 
 # ── 6. Spotlight launcher ────────────────────────────────────────────────────
 APP="$APPS_DIR/Flickwise.app"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" 2>/dev/null)" = "app.flickwise.mac" ]; then
+    ok "The native Flickwise app is installed in $(basename "$APPS_DIR"); not adding the launcher"
+else
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -197,6 +200,7 @@ if [ -f "$ICON_PNG" ] && [ ! -f "$APP/Contents/Resources/AppIcon.icns" ]; then
     iconutil -c icns "$iconset" -o "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 fi
 ok "Flickwise.app in $(basename "$APPS_DIR") (search \"Flickwise\" in Spotlight to open settings)"
+fi
 
 # ── 7. Reload Hammerspoon ────────────────────────────────────────────────────
 if [ "${FLICKWISE_SKIP_HAMMERSPOON:-}" != "1" ]; then

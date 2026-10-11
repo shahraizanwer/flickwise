@@ -19,6 +19,8 @@ Tick a box when an idea is picked, and move it to **Done** when shipped.
 - [x] **2.4 Fix history + personal mistake tracker**: menu bar → History & Progress…. It keeps a searchable local history of fixes and answers, plus My Progress (mistake types, repeated corrections, weekly trend). Stored per Mac, never uploaded. (`lib/history.lua`, `lib/history_window.lua`)
 - [x] **Minimal Fix (⌃⌘G)**: the closest correct sentence. It fixes only real mistakes with the fewest changes and never rephrases, so a learner sees exactly what was wrong instead of feeling the whole sentence was bad. It runs at temperature 0 (new per-mode `temperature` setting).
 - [x] **6.12 Reply Helper (⌃⌘R)**: select a message you received and get its meaning plus 3 replies (Short / Detailed / Polite no). Press 1–3 or click to insert one at your cursor, or Copy it. (`output: "replies"`, reply card in `diff_bubble.lua`)
+- [x] **2.5 Voice dictation (hold Right ⌃)**: hold the key, speak English, Urdu or a mix, release, and clean (or translated, polished) text is typed at the cursor in any app. Records with ffmpeg, transcribes with Gemini or offline whisper.cpp, then polishes the text. Off by default; enable with `features.dictation`. (`lib/dictation.lua`)
+- [x] **5.1 (phase 1) Native macOS app, with dictation + Voice History**: `macos/` is a Swift menu bar app. Hold Right ⌘ and the mic starts instantly (AVAudioEngine, no ffmpeg); **Whisper large-v3-turbo runs on the Mac** (whisper.cpp, Metal, optional Neural Engine encoder; ~1.3–1.8 s, no key, no rate limits; Gemini optional); the text is typed at the cursor. Every dictation goes into a searchable **Voice History** (SQLite + FTS5) with stats, and failed recordings are kept for Retry. Installed with `macos/install.sh` (builds from source, stable local signature so permissions persist). (`macos/`, see `macos/README.md`)
 - [x] **Feature flags**: every optional feature is switched under `features:` in `config.yaml`, or from menu bar → Features. (`lib/features.lua`)
 
 ---
@@ -135,7 +137,7 @@ app_profiles:
 
 ---
 
-### [ ] 2.5 Voice → polished English (Wispr-style) 🔴
+### [x] 2.5 Voice → polished English (Wispr-style) 🔴 (shipped 2026-10-11, see Done)
 **Idea:** hold a key, speak in Urdu, English, or a mix, release, and polished English is typed into the field.
 
 - Record audio with a small helper (`sox` / `ffmpeg` via `hs.task`, or a tiny Swift CLI).
@@ -204,11 +206,22 @@ If the network or API fails, fall back to a local model (e.g., via Ollama) for b
 
 ## 5. Bigger architectural option
 
-### [ ] 5.1 Rebuild as a native Swift menu bar app 🔴
+### [~] 5.1 Rebuild as a native Swift menu bar app 🔴 (in progress: phase 1 shipped 2026-10-11)
 **Pros:** real macOS vibrancy/blur, smoother animations, reliable caret positioning, first-class audio for voice input, a proper installable `.app`.
-**Cons:** full rewrite; needs Xcode, code signing, and Accessibility/Microphone permission handling.
+**Cons:** full rewrite; code signing, and Accessibility/Microphone permission handling. (Turned out Xcode isn't needed: `swiftc` + a local signing certificate.)
 
-**Current recommendation:** stay in Hammerspoon. Everything above except polished voice input is achievable there. Revisit if voice (2.5) becomes the main feature.
+Voice became the main feature, so the move started. Phases:
+- [x] **Phase 1:** dictation (instant start, live waveform pill), Voice History (search, stats, retry), settings, setup window, installer.
+- [ ] **Phase 2:** text fixes. Port the modes (`config.yaml` modes → the native settings), hotkeys, `ax_text` capture/replace, and the "what changed" bubble with undo.
+- [ ] **Phase 3:** radial menu, mode picker, Explain Meaning / Reply Helper cards, fix history + My Progress (merged with Voice History).
+- [ ] **Phase 4:** retire Hammerspoon. Remove `install.sh`'s Hammerspoon steps and point the README at the native app.
+- Ideas the native app makes easy:
+  - [x] **On-device transcription** with whisper.cpp (shipped 2026-10-11; see the decisions log). Still to try: Apple's SpeechAnalyzer (macOS 26) for sub-second English.
+  - **Streaming / chunked recognition**: recognize 30 s chunks while you're still talking, so long dictations finish right after release (turbo's cost is a fixed ~1.5 s per 30 s window).
+  - **Local polish/translation**: a small on-device LLM (or Glean on the work laptop) for Polished English, since turbo can't translate.
+  - **Voice commands** ("make this formal", "reply saying yes") on the current selection.
+  - **Daily voice journal**: a per-day summary of Voice History.
+  - **Personal dictionary**: names and jargon passed to the transcriber as hints.
 
 ---
 
@@ -414,3 +427,7 @@ Then add **3.1 Radial menu** for the less common modes.
 - 2026-09-29 — Added **Minimal Fix** (user request: rephrasing everything is discouraging, and the closest correct sentence builds confidence). Compared with Fix Grammar on real samples, it keeps the learner's words (e.g. "told me" instead of "said", keeps "since morning"). Added a per-mode `temperature` (Minimal Fix = 0). Counted in My Progress by default.
 - 2026-09-30 — Removed the **Explain Code** mode (never used). This frees ⌘⇧E and a radial slot.
 - 2026-09-30 — Shipped **6.12 Reply Helper**. The card stays open on outside clicks so you can click into the reply box. The number keys only work until you type, so typed digits are never swallowed. Replies are inserted at the caret through Accessibility (clipboard untouched) or by paste. Tested in TextEdit: pressing 1 inserted reply 1 with a clipboard changeCount delta of 0. The prompt was tuned to reuse facts from the message (e.g. "3pm") instead of placeholders.
+- 2026-10-11 — Shipped **2.5** as `features.dictation` (off by default). Chose Hammerspoon + ffmpeg over a separate app or a Swift helper: Flickwise already has the Accessibility grant, the pill and `insert_text`, and ffmpeg is a one-line install. Default trigger is **hold Right ⌃** (Right ⌥ is the radial menu; Fn collides with Wispr Flow and the macOS emoji key). Two steps on purpose: Gemini's audio mode keeps fillers whatever the prompt says, so the audio is transcribed verbatim and then rewritten as text. ffmpeg needs ~1 s to start, so the pill says **Listening…** only once audio is flowing. Known limits: no live waveform, and the first ~0.5 s after the pill appears can be lost, so wait for **Listening…** before speaking. A native recorder helper would fix both if this becomes the main feature.
+- 2026-10-11 — Started **5.1** (native app) because Hammerspoon dictation felt slow: ffmpeg needed ~1 s to start and the first words could be lost. Phase 1 in `macos/`: Swift + AppKit/SwiftUI, AVAudioEngine straight into memory, with the mic started on key-down (*instant start*: a tap or chord discards it) and TLS warmed while you speak. **Voice History** in SQLite + FTS5, and failed recordings are kept for Retry. Built with plain `swiftc` (no Xcode; SwiftPM dropped because this Mac's Command Line Tools ship a mismatched PackageDescription, and a stale SwiftBridging modulemap is hidden with a VFS overlay). Signed with a self-signed local certificate so TCC grants survive rebuilds. The API key lives in a 0600 file, not the Keychain, because without a Team ID Keychain items are bound to the cdhash and prompt after every rebuild. Default trigger is **Right ⌘** (what this user had picked); the installer turns off the Hammerspoon dictation so they don't both listen. Text fixes stay in Hammerspoon until phase 2.
+- 2026-10-11 — Native dictation is now **on-device by default**: whisper.cpp (official prebuilt xcframework b5130 / v1.9.4, pinned by SHA-256, linked in process) running **Whisper large-v3-turbo**, the model Voicebox uses for dictation (`openai/whisper-large-v3-turbo`; Voicebox runs it through MLX in Python, which can't be embedded). Benchmarked on an M1 Pro (`Flickwise --benchmark`): turbo q8 1.76 s per clip vs q5 2.00 s vs full 1.67 s with identical text, so the default is **q8_0** (874 MB). The optional Core ML encoder cuts it to **1.31 s** (+1.2 GB, ~130 s compile once), offered as "Neural Engine boost" (it gave nothing for Small, so it's turbo-only). Gemini measured 1.7–2.8 s plus ~0.7 s to polish, and invented a sentence from 2 s of silence, so a **speech gate** now runs before any recognizer. Rejected: `audio_ctx` shrinking (turbo outputs garbage on short clips). Turbo doesn't translate, so Polished English from Urdu/Hindi needs Small or Gemini polish for now. Gemini stays available (engine `gemini`, or `polish_with_gemini`).
+- 2026-10-12 — Native dictation indicator now comes **out of the notch** (Dynamic Island style) with a mascot, **Flicky**, instead of the bottom pill (still available: `dictation.indicator: "pill"`). Screens without a notch get the same island from the top centre.

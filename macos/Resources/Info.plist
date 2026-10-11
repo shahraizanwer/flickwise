@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>                 <string>Flickwise</string>
+    <key>CFBundleDisplayName</key>          <string>Flickwise</string>
+    <key>CFBundleIdentifier</key>           <string>app.flickwise.mac</string>
+    <key>CFBundleExecutable</key>           <string>Flickwise</string>
+    <key>CFBundleIconFile</key>             <string>AppIcon</string>
+    <key>CFBundlePackageType</key>          <string>APPL</string>
+    <key>CFBundleShortVersionString</key>   <string>__VERSION__</string>
+    <key>CFBundleVersion</key>              <string>__BUILD__</string>
+    <key>LSMinimumSystemVersion</key>       <string>13.3</string>
+    <key>LSUIElement</key>                  <true/>
+    <key>NSHighResolutionCapable</key>      <true/>
+    <key>NSMicrophoneUsageDescription</key> <string>Flickwise records your voice while you hold the dictation key, so it can type what you say.</string>
+    <key>NSHumanReadableCopyright</key>     <string>Personal build</string>
+</dict>
+</plist>
