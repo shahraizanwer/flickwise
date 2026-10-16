@@ -1,7 +1,9 @@
 // TextInserter — types text at the caret of whatever app has focus.
 //   1. Accessibility: set AXSelectedText on the focused element and verify it changed
 //      (clipboard untouched). Skipped for web content (browsers, Electron apps), where
-//      writing the DOM directly bypasses the page's input events.
+//      writing the DOM directly bypasses the page's input events, for terminals, which can
+//      draw the text without sending it to the program running in them, and for the apps
+//      listed under "Always use copy/paste in".
 //   2. Otherwise paste: put the text on the clipboard, send ⌘V, then restore the
 //      previous clipboard. The temporary item is marked transient so clipboard
 //      managers ignore it.
@@ -12,14 +14,14 @@ import ApplicationServices
 enum TextInserter {
     enum Outcome { case direct, pasted, copied }
 
-    static func insert(_ text: String) -> Outcome {
+    static func insert(_ text: String, alwaysPasteIn apps: [String] = []) -> Outcome {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 1.0)    // a hung app mustn't freeze us for the default 6 s
         guard let el: AXUIElement = attribute(system, kAXFocusedUIElementAttribute) else {
             copyToClipboard(text)
             return .copied
         }
-        if let why = cannotWriteDirectly(el) {
+        if let why = cannotWriteDirectly(el, alwaysPasteIn: apps) {
             Log.debug("Insert by paste: \(why)")
             paste(text)
             return .pasted
@@ -37,13 +39,33 @@ enum TextInserter {
 
     // ── Accessibility ───────────────────────────────────────────────────────
 
-    private static func cannotWriteDirectly(_ el: AXUIElement) -> String? {
+    private static func cannotWriteDirectly(_ el: AXUIElement, alwaysPasteIn apps: [String]) -> String? {
         if (attribute(el, kAXSubroleAttribute) as String?) == "AXSecureTextField" { return "secure field" }
+        var pid: pid_t = 0
+        if AXUIElementGetPid(el, &pid) == .success, let app = NSRunningApplication(processIdentifier: pid) {
+            if isTerminal(app) { return "terminal" }
+            if let name = app.localizedName, apps.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+                return "copy/paste app"
+            }
+        }
         var settable: DarwinBoolean = false
         guard AXUIElementIsAttributeSettable(el, kAXSelectedTextAttribute as CFString, &settable) == .success,
               settable.boolValue else { return "not editable through Accessibility" }
         if isWebContent(el) { return "web content" }
         return nil
+    }
+
+    /// Terminal emulators: an Accessibility write can show up on screen without reaching the
+    /// shell or the program running in it (it vanishes on the next redraw), so always paste.
+    static let terminalBundleIDs: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
+        "dev.warp.Warp", "com.github.wez.wezterm", "net.kovidgoyal.kitty", "org.alacritty", "io.alacritty",
+        "co.zeit.hyper", "org.tabby", "com.raphaelamorim.rio",
+    ]
+
+    static func isTerminal(_ app: NSRunningApplication?) -> Bool {
+        guard let id = app?.bundleIdentifier else { return false }
+        return terminalBundleIDs.contains(id)
     }
 
     static func isWebContent(_ el: AXUIElement) -> Bool {

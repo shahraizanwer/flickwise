@@ -184,7 +184,7 @@ final class FixController {
     func insert(_ text: String, into target: NSRunningApplication?) {
         if let target, target != NSWorkspace.shared.frontmostApplication { target.activate() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            _ = TextInserter.insert(text)
+            _ = TextInserter.insert(text, alwaysPasteIn: self.settings.fixes.excludeApps)
             HUD.shared.done("Inserted", detail: String(text.prefix(60)))
         }
     }

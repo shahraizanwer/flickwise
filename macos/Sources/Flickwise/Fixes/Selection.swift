@@ -31,6 +31,7 @@ enum Selection {
         if let app, s.excludeApps.contains(where: { $0.caseInsensitiveCompare(app) == .orderedSame }) {
             return (nil, "excluded app")
         }
+        if TextInserter.isTerminal(NSWorkspace.shared.frontmostApplication) { return (nil, "terminal") }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 1.0)
         guard let el: AXUIElement = TextInserter.attribute(system, kAXFocusedUIElementAttribute) else {

@@ -224,7 +224,7 @@ final class DictationController {
             record.rawText = t.raw
             record.text = text
             record.engine = t.engine
-            switch TextInserter.insert(text) {
+            switch TextInserter.insert(text, alwaysPasteIn: store.settings.fixes.excludeApps) {
             case .direct:
                 record.status = .inserted
                 HUD.shared.done("Inserted", detail: Self.preview(text))

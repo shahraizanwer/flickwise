@@ -58,7 +58,9 @@ struct FeaturesPane: View {
                     Text("Write directly").tag(AppSettings.WebContent.direct)
                 }
                 .disabled(!store.settings.fixes.directReplace)
-                ListField(title: "Always use copy/paste in", items: $store.settings.fixes.excludeApps, placeholder: "App name, e.g. Terminal")
+                ListField(title: "Always use copy/paste in", items: $store.settings.fixes.excludeApps, placeholder: "App name, e.g. Notes")
+                Text("Also used for dictation. Terminals (Terminal, iTerm2, Ghostty…) always use copy/paste.")
+                    .font(.caption).foregroundColor(.secondary)
                 Picker("Sound when done", selection: $store.settings.fixes.sound) {
                     ForEach(sounds, id: \.self) { Text($0.isEmpty ? "None" : $0).tag($0) }
                 }
